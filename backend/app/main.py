@@ -1,5 +1,6 @@
 import logging
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -9,6 +10,31 @@ from app.middleware.error_handling import RequestLoggingMiddleware, register_exc
 
 logging.basicConfig(level=logging.INFO if not settings.DEBUG else logging.DEBUG)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    import os
+    email = os.environ.get("SEED_ADMIN_EMAIL")
+    password = os.environ.get("SEED_ADMIN_PASSWORD")
+    if email and password:
+        from app.core.database import AsyncSessionLocal
+        from sqlalchemy import select
+        from app.models.models import Admin, AdminRole
+        from app.core.security import hash_password
+        
+        async with AsyncSessionLocal() as db:
+            existing = (await db.execute(select(Admin).where(Admin.email == email))).scalar_one_or_none()
+            if not existing:
+                admin = Admin(
+                    email=email,
+                    hashed_password=hash_password(password),
+                    full_name=os.environ.get("SEED_ADMIN_NAME", "Super Admin"),
+                    role=AdminRole.SUPER_ADMIN,
+                )
+                db.add(admin)
+                await db.commit()
+                logging.info(f"Created super admin from environment variables: {email}")
+    yield
+
 app = FastAPI(
     title=settings.APP_NAME,
     description="Admin Portal + API Gateway that proxies developer requests to AI providers "
@@ -17,6 +43,7 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
