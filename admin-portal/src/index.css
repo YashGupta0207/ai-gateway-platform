@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+::selection { background: #4FD1FF33; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.pulse-dot { animation: pulse-dot 1.8s ease-in-out infinite; }
+
+@layer components {
+  .btn-primary {
+    @apply w-full bg-accent text-base font-medium text-sm rounded px-3 py-2 hover:opacity-90 transition-opacity disabled:opacity-50;
+  }
+  .btn-secondary {
+    @apply bg-panelalt border border-border text-text text-sm rounded px-3 py-2 hover:border-accent/50 transition-colors disabled:opacity-50;
+  }
+  .card {
+    @apply bg-panel border border-border rounded-lg;
+  }
+  .badge-ok {
+    @apply text-ok bg-ok/10 border border-ok/30 text-xs px-2 py-0.5 rounded-full font-mono;
+  }
+  .badge-warn {
+    @apply text-warn bg-warn/10 border border-warn/30 text-xs px-2 py-0.5 rounded-full font-mono;
+  }
+}
