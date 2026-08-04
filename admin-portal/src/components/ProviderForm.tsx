@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Provider, ProviderDetails } from "../api/client";
+import { useState, useEffect } from "react";
+import { Provider, ProviderDetails, api, AvailableAdapter } from "../api/client";
 
 interface Row {
   key: string;   // stable React key, independent of the (editable) variable_name
@@ -27,6 +27,23 @@ export default function ProviderForm({
   const originalNames = existing ? existing.credentials.map((c) => c.variable_name) : [];
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [adapters, setAdapters] = useState<AvailableAdapter[]>([]);
+
+  useEffect(() => {
+    api.availableAdapters().then(setAdapters).catch(console.error);
+  }, []);
+
+  function applySuggestion(adapterKey: string) {
+    const adapter = adapters.find((a) => a.adapter_key === adapterKey);
+    if (!adapter) return;
+    const currentKeys = rows.map((r) => r.variable_name);
+    const newRows = adapter.suggested_variables
+      .filter((v) => !currentKeys.includes(v.name))
+      .map((v) => newRow(v.name, ""));
+    if (newRows.length > 0) {
+      setRows((prev) => [...prev, ...newRows]);
+    }
+  }
 
   function updateRow(key: string, patch: Partial<Row>) {
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
