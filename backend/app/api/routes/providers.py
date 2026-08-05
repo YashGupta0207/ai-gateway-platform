@@ -400,5 +400,9 @@ async def delete_provider(provider_id: uuid.UUID, admin: Admin = Depends(require
             status.HTTP_409_CONFLICT,
             f"Cannot delete this provider because {token_count} developer token(s) are assigned to it. Delete those tokens first.",
         )
+    
+    # Delete associated request logs so they don't show up in the dashboard
+    await db.execute(sa.delete(ApiRequestLog).where(ApiRequestLog.provider_id == provider_id))
+    
     await repo.delete(provider)
     return None
