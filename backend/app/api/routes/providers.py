@@ -13,7 +13,7 @@ from app.api.deps import get_current_admin, require_role
 from app.core.database import get_db
 from app.core.encryption import cipher
 from app.models.models import (
-    Admin, AdminRole, ApiRequestLog, DeveloperToken, Provider, ProviderProfile, ProviderProfileCredential, ProviderStatus,
+    Admin, AdminRole, ApiRequestLog, DeveloperToken, Provider, ProviderProfile, ProviderProfileCredential, ProviderStatus, TokenProviderAuthorization
 )
 from app.repositories.provider_repository import ProviderRepository
 
@@ -126,10 +126,12 @@ def _mask(value: str) -> str:
 
 async def _stats_for_provider(db: AsyncSession, provider_id: uuid.UUID) -> dict:
     token_count = (await db.execute(
-        select(func.count(DeveloperToken.id)).where(DeveloperToken.provider_id == provider_id)
+        select(func.count(TokenProviderAuthorization.token_id)).where(TokenProviderAuthorization.provider_id == provider_id)
     )).scalar_one()
     last_used_at = (await db.execute(
-        select(func.max(DeveloperToken.last_used_at)).where(DeveloperToken.provider_id == provider_id)
+        select(func.max(DeveloperToken.last_used_at))
+        .join(TokenProviderAuthorization, TokenProviderAuthorization.token_id == DeveloperToken.id)
+        .where(TokenProviderAuthorization.provider_id == provider_id)
     )).scalar_one()
     total_requests = (await db.execute(
         select(func.count(ApiRequestLog.id)).where(ApiRequestLog.provider_id == provider_id)
@@ -391,7 +393,7 @@ async def delete_provider(provider_id: uuid.UUID, admin: Admin = Depends(require
     if provider is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Provider not found")
     token_count = (await db.execute(
-        select(func.count(DeveloperToken.id)).where(DeveloperToken.provider_id == provider_id)
+        select(func.count(TokenProviderAuthorization.token_id)).where(TokenProviderAuthorization.provider_id == provider_id)
     )).scalar_one()
     if token_count:
         raise HTTPException(
