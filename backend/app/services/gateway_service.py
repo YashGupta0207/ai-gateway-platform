@@ -19,9 +19,8 @@ from fastapi.responses import Response, StreamingResponse
 from starlette.requests import Request
 
 from app.adapters.registry import registry
-from app.core.encryption import EncryptionError
-from app.models.models import ApiRequestLog, DeveloperToken, Provider
-from app.repositories.provider_credential_repository import ProviderCredentialRepository
+from app.core.encryption import cipher, EncryptionError
+from app.models.models import ApiRequestLog, DeveloperToken, Provider, ProviderProfileCredential
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
 
@@ -45,7 +44,8 @@ async def proxy_request(
         # one flat {variable_name: decrypted_value} dict, exactly the shape
         # every adapter's build_request() expects. The Gateway never knows
         # or cares what the variable names are.
-        credentials = await ProviderCredentialRepository(db).decrypt_profile(profile_id)
+        cred_rows = (await db.execute(select(ProviderProfileCredential).where(ProviderProfileCredential.profile_id == profile_id))).scalars().all()
+        credentials = {row.variable_name: cipher.decrypt(row.encrypted_value) for row in cred_rows}
     except EncryptionError as exc:
         await _log(db, token, provider.id, path, incoming.method, None, None, str(exc), ip_address=client_ip, user_agent=user_agent)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Credential decryption failed") from exc
