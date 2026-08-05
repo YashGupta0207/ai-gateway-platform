@@ -76,7 +76,7 @@ async def dashboard_summary(admin: Admin = Depends(get_current_admin), db: Async
 
     providers = (await db.execute(select(Provider))).scalars().all()
     developer_rows = (await db.execute(select(DeveloperToken.label, func.sum(DeveloperToken.total_requests), func.sum(DeveloperToken.total_tokens)).group_by(DeveloperToken.label).order_by(func.sum(DeveloperToken.total_tokens).desc()).limit(10))).all()
-    provider_rows = (await db.execute(select(Provider.display_name, func.coalesce(func.sum(DeveloperToken.total_requests), 0), func.coalesce(func.sum(DeveloperToken.total_tokens), 0)).outerjoin(DeveloperToken, DeveloperToken.provider_id == Provider.id).group_by(Provider.id, Provider.display_name).order_by(func.coalesce(func.sum(DeveloperToken.total_tokens), 0).desc()).limit(10))).all()
+    provider_rows = (await db.execute(select(Provider.display_name, func.count(ApiRequestLog.id), func.coalesce(func.sum(ApiRequestLog.total_tokens), 0)).outerjoin(ApiRequestLog, ApiRequestLog.provider_id == Provider.id).group_by(Provider.id, Provider.display_name).order_by(func.coalesce(func.sum(ApiRequestLog.total_tokens), 0).desc()).limit(10))).all()
 
     return DashboardOut(
         total_providers=total_providers,
