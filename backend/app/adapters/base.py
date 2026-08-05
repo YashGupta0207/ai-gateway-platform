@@ -97,3 +97,10 @@ class BaseProviderAdapter(ABC):
         if required:
             raise ValueError(f"Missing credential variable (expected one of: {', '.join(names)})")
         return None
+
+    def normalize_usage(self, content: bytes) -> dict[str, int | float]:
+        """
+        Normalize usage from the provider's response body.
+        Should return a dict with: prompt_tokens, completion_tokens, total_tokens, estimated_cost.
+        """
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "estimated_cost": 0.0}

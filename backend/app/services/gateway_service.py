@@ -20,7 +20,7 @@ from starlette.requests import Request
 
 from app.adapters.registry import registry
 from app.core.encryption import EncryptionError
-from app.models.models import ApiRequestLog, DeveloperToken
+from app.models.models import ApiRequestLog, DeveloperToken, Provider
 from app.repositories.provider_credential_repository import ProviderCredentialRepository
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
@@ -29,9 +29,8 @@ _client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=120.0, writ
 
 
 async def proxy_request(
-    *, db: AsyncSession, token: DeveloperToken, incoming: Request, path: str,
+    *, db: AsyncSession, token: DeveloperToken, provider: Provider, profile_id, incoming: Request, path: str,
 ) -> Response:
-    provider = token.provider
     # provider.adapter_key doubles as "provider_type" in the admin UI. Any
     # value that isn't one of the specialized adapters below transparently
     # falls back to the generic REST adapter — this is what makes brand-new
@@ -46,7 +45,7 @@ async def proxy_request(
         # one flat {variable_name: decrypted_value} dict, exactly the shape
         # every adapter's build_request() expects. The Gateway never knows
         # or cares what the variable names are.
-        credentials = await ProviderCredentialRepository(db).decrypt_all(provider.id)
+        credentials = await ProviderCredentialRepository(db).decrypt_profile(profile_id)
     except EncryptionError as exc:
         await _log(db, token, provider.id, path, incoming.method, None, None, str(exc), ip_address=client_ip, user_agent=user_agent)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Credential decryption failed") from exc
@@ -98,7 +97,7 @@ async def proxy_request(
 
     content = await upstream.aread()
     await upstream.aclose()
-    usage = _normalized_usage(provider.adapter_key, content)
+    usage = adapter.normalize_usage(content)
     await _log(db, token, provider.id, path, incoming.method, upstream.status_code,
                 latency_ms, None, request_size, len(content), ip_address=client_ip,
                 user_agent=user_agent, usage=usage)
@@ -172,14 +171,4 @@ async def _enforce_limits(db: AsyncSession, token: DeveloperToken) -> None:
             raise HTTPException(status_code=429, detail=message)
 
 
-def _normalized_usage(adapter_key: str, content: bytes) -> dict[str, int | float]:
-    """Normalize OpenAI/Azure, Gemini, and common provider usage payloads."""
-    try:
-        payload = json.loads(content)
-    except (ValueError, TypeError):
-        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "estimated_cost": 0.0}
-    usage = payload.get("usage") or payload.get("usageMetadata") or {}
-    prompt = usage.get("prompt_tokens", usage.get("promptTokenCount", usage.get("input_tokens", 0))) or 0
-    completion = usage.get("completion_tokens", usage.get("candidatesTokenCount", usage.get("output_tokens", 0))) or 0
-    total = usage.get("total_tokens", usage.get("totalTokenCount", 0)) or (prompt + completion)
-    return {"prompt_tokens": int(prompt), "completion_tokens": int(completion), "total_tokens": int(total), "estimated_cost": 0.0}
+

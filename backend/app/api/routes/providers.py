@@ -4,6 +4,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
+import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import CredentialField
@@ -12,9 +13,8 @@ from app.api.deps import get_current_admin, require_role
 from app.core.database import get_db
 from app.core.encryption import cipher
 from app.models.models import (
-    Admin, AdminRole, ApiRequestLog, DeveloperToken, Provider, ProviderCredential, ProviderStatus,
+    Admin, AdminRole, ApiRequestLog, DeveloperToken, Provider, ProviderProfile, ProviderProfileCredential, ProviderStatus,
 )
-from app.repositories.provider_credential_repository import DuplicateVariableError, ProviderCredentialRepository
 from app.repositories.provider_repository import ProviderRepository
 
 router = APIRouter(prefix="/providers", tags=["Providers"])
@@ -58,14 +58,14 @@ class ProviderCreateRequest(BaseModel):
     name: str                       # "Provider Name"
     provider_type: str              # free text, e.g. "Azure", "Gemini", "Custom REST API"
     description: str | None = None
-    credentials: list[CredentialPairIn]
+    profiles: list["ProfileIn"] | None = None
 
 
 class ProviderUpdateRequest(BaseModel):
     name: str | None = None
     provider_type: str | None = None
     description: str | None = None
-    credentials: list[CredentialPairIn] | None = None   # full replace when provided
+    profiles: list["ProfileIn"] | None = None
 
 
 class CredentialVariableOut(BaseModel):
@@ -90,9 +90,32 @@ class ProviderOut(BaseModel):
 
 
 class ProviderDetailsOut(ProviderOut):
-    credentials: list[CredentialVariableOut]
+    profiles: list["ProfileDetailsOut"]
     total_requests: int
     total_tokens_used: int
+
+class ProfileDetailsOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    is_active: bool
+    is_default: bool
+    priority: int
+    credentials: list[CredentialVariableOut]
+
+
+class ProfileIn(BaseModel):
+    name: str
+    priority: int = 0
+    is_default: bool = False
+    credentials: list[CredentialPairIn] = []
+
+
+class ProfileOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    is_active: bool
+    is_default: bool
+    priority: int
 
 
 def _mask(value: str) -> str:
@@ -123,7 +146,7 @@ async def _stats_for_provider(db: AsyncSession, provider_id: uuid.UUID) -> dict:
 async def _to_out(db: AsyncSession, provider: Provider, credential_count: int | None = None) -> ProviderOut:
     stats = await _stats_for_provider(db, provider.id)
     if credential_count is None:
-        credential_count = len(await ProviderCredentialRepository(db).list_by_provider(provider.id))
+        credential_count = 0
     return ProviderOut(
         id=provider.id, name=provider.display_name, provider_type=provider.adapter_key,
         description=provider.description, status=provider.status,
@@ -177,15 +200,16 @@ async def create_provider(
     )
     provider = await ProviderRepository(db).create(provider)
 
-    if payload.credentials:
-        try:
-            await ProviderCredentialRepository(db).replace_all(
-                provider.id, [(c.variable_name, c.value) for c in payload.credentials],
-            )
-        except DuplicateVariableError as exc:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    if payload.profiles:
+        for p in payload.profiles:
+            profile = ProviderProfile(provider_id=provider.id, name=p.name.strip(), priority=p.priority, is_default=p.is_default)
+            db.add(profile)
+            await db.flush()
+            for pair in p.credentials:
+                db.add(ProviderProfileCredential(profile_id=profile.id, variable_name=pair.variable_name, encrypted_value=cipher.encrypt(pair.value)))
+        await db.commit()
 
-    return await _to_out(db, provider)
+    return await _to_out(db, provider, credential_count=0)
 
 
 @router.get("/{provider_id}", response_model=ProviderDetailsOut)
@@ -194,16 +218,56 @@ async def get_provider(provider_id: uuid.UUID, admin: Admin = Depends(get_curren
     if provider is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Provider not found")
 
-    cred_rows = await ProviderCredentialRepository(db).list_by_provider(provider_id)
-    decrypted = {row.variable_name: cipher.decrypt(row.encrypted_value) for row in cred_rows}
+    profiles = (await db.execute(select(ProviderProfile).where(ProviderProfile.provider_id == provider_id).order_by(ProviderProfile.is_default.desc(), ProviderProfile.priority.desc()))).scalars().all()
+    
+    profile_details = []
+    total_credentials = 0
+    for profile in profiles:
+        cred_rows = (await db.execute(select(ProviderProfileCredential).where(ProviderProfileCredential.profile_id == profile.id))).scalars().all()
+        total_credentials += len(cred_rows)
+        decrypted = {row.variable_name: cipher.decrypt(row.encrypted_value) for row in cred_rows}
+        profile_details.append(ProfileDetailsOut(
+            id=profile.id, name=profile.name, is_active=profile.is_active, is_default=profile.is_default, priority=profile.priority,
+            credentials=[CredentialVariableOut(variable_name=name, masked_value=_mask(value)) for name, value in decrypted.items()]
+        ))
+
     stats = await _stats_for_provider(db, provider_id)
 
-    base = await _to_out(db, provider, credential_count=len(cred_rows))
+    base = await _to_out(db, provider, credential_count=total_credentials)
     return ProviderDetailsOut(
         **base.model_dump(),
-        credentials=[CredentialVariableOut(variable_name=name, masked_value=_mask(value)) for name, value in decrypted.items()],
+        profiles=profile_details,
         total_requests=stats["total_requests"], total_tokens_used=stats["total_tokens_used"],
     )
+
+
+@router.get("/{provider_id}/profiles", response_model=list[ProfileOut])
+async def list_profiles(provider_id: uuid.UUID, admin: Admin = Depends(get_current_admin), db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(ProviderProfile).where(ProviderProfile.provider_id == provider_id).order_by(ProviderProfile.is_default.desc(), ProviderProfile.priority.desc()))).scalars().all()
+    return [ProfileOut.model_validate(row, from_attributes=True) for row in rows]
+
+
+@router.post("/{provider_id}/profiles", response_model=ProfileOut, status_code=status.HTTP_201_CREATED)
+async def create_profile(provider_id: uuid.UUID, payload: ProfileIn, admin: Admin = Depends(require_role(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)), db: AsyncSession = Depends(get_db)):
+    provider = await ProviderRepository(db).get_by_id(provider_id)
+    if provider is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Provider not found")
+    profile = ProviderProfile(provider_id=provider_id, name=payload.name.strip(), priority=payload.priority, is_default=payload.is_default)
+    if not profile.name:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Profile name cannot be empty")
+    if payload.is_default:
+        for row in (await db.execute(select(ProviderProfile).where(ProviderProfile.provider_id == provider_id))).scalars(): row.is_default = False
+    db.add(profile)
+    await db.flush()
+    seen: set[str] = set()
+    for pair in payload.credentials:
+        key = pair.variable_name.casefold()
+        if key in seen: raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Duplicate key '{pair.variable_name}'")
+        seen.add(key)
+        db.add(ProviderProfileCredential(profile_id=profile.id, variable_name=pair.variable_name, encrypted_value=cipher.encrypt(pair.value)))
+    await db.commit()
+    await db.refresh(profile)
+    return ProfileOut.model_validate(profile, from_attributes=True)
 
 
 class RevealOut(BaseModel):
@@ -211,15 +275,14 @@ class RevealOut(BaseModel):
     value: str
 
 
-@router.get("/{provider_id}/credentials/{variable_name}/reveal", response_model=RevealOut)
+@router.get("/{provider_id}/profiles/{profile_id}/credentials/{variable_name}/reveal", response_model=RevealOut)
 async def reveal_credential(
-    provider_id: uuid.UUID, variable_name: str,
+    provider_id: uuid.UUID, profile_id: uuid.UUID, variable_name: str,
     admin: Admin = Depends(require_role(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)),
     db: AsyncSession = Depends(get_db),
 ):
     """Only super_admin/admin can reveal a plaintext credential value — never bundled into list/detail responses by default."""
-    rows = await ProviderCredentialRepository(db).list_by_provider(provider_id)
-    row = next((r for r in rows if r.variable_name == variable_name), None)
+    row = (await db.execute(select(ProviderProfileCredential).where(ProviderProfileCredential.profile_id == profile_id, ProviderProfileCredential.variable_name == variable_name))).scalar_one_or_none()
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Credential variable not found")
     return RevealOut(variable_name=row.variable_name, value=cipher.decrypt(row.encrypted_value))
@@ -246,49 +309,56 @@ async def update_provider(
 
     provider = await repo.update(provider)
 
-    if payload.credentials is not None:
-        try:
-            await ProviderCredentialRepository(db).replace_all(
-                provider.id, [(c.variable_name, c.value) for c in payload.credentials],
-            )
-        except DuplicateVariableError as exc:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    if payload.profiles is not None:
+        # Delete existing profiles
+        await db.execute(sa.delete(ProviderProfile).where(ProviderProfile.provider_id == provider.id))
+        
+        for p in payload.profiles:
+            profile = ProviderProfile(provider_id=provider.id, name=p.name.strip(), priority=p.priority, is_default=p.is_default)
+            db.add(profile)
+            await db.flush()
+            for pair in p.credentials:
+                db.add(ProviderProfileCredential(profile_id=profile.id, variable_name=pair.variable_name, encrypted_value=cipher.encrypt(pair.value)))
+        await db.commit()
 
-    return await _to_out(db, provider)
+    return await _to_out(db, provider, credential_count=0)
 
 
-@router.post("/{provider_id}/rotate-credentials", response_model=ProviderOut)
+@router.post("/{provider_id}/profiles/{profile_id}/rotate-credentials", response_model=ProfileOut)
 async def rotate_credentials(
     provider_id: uuid.UUID,
+    profile_id: uuid.UUID,
     payload: list[CredentialPairIn],
     admin: Admin = Depends(require_role(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)),
     db: AsyncSession = Depends(get_db),
 ):
     """Partial update — only rotates the variables provided, leaves the rest untouched."""
-    provider = await ProviderRepository(db).get_by_id(provider_id)
-    if provider is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Provider not found")
+    profile = (await db.execute(select(ProviderProfile).where(ProviderProfile.id == profile_id, ProviderProfile.provider_id == provider_id))).scalar_one_or_none()
+    if profile is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Profile not found")
 
-    try:
-        await ProviderCredentialRepository(db).upsert_many(
-            provider_id, [(c.variable_name, c.value) for c in payload],
-        )
-    except DuplicateVariableError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    for pair in payload:
+        row = (await db.execute(select(ProviderProfileCredential).where(ProviderProfileCredential.profile_id == profile.id, ProviderProfileCredential.variable_name == pair.variable_name))).scalar_one_or_none()
+        if row:
+            row.encrypted_value = cipher.encrypt(pair.value)
+        else:
+            db.add(ProviderProfileCredential(profile_id=profile.id, variable_name=pair.variable_name, encrypted_value=cipher.encrypt(pair.value)))
+    
+    await db.commit()
+    return ProfileOut.model_validate(profile, from_attributes=True)
 
-    return await _to_out(db, provider)
 
-
-@router.delete("/{provider_id}/credentials/{variable_name}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{provider_id}/profiles/{profile_id}/credentials/{variable_name}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_credential_variable(
-    provider_id: uuid.UUID, variable_name: str,
+    provider_id: uuid.UUID, profile_id: uuid.UUID, variable_name: str,
     admin: Admin = Depends(require_role(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)),
     db: AsyncSession = Depends(get_db),
 ):
-    provider = await ProviderRepository(db).get_by_id(provider_id)
-    if provider is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Provider not found")
-    await ProviderCredentialRepository(db).delete_variable(provider_id, variable_name)
+    row = (await db.execute(select(ProviderProfileCredential).where(ProviderProfileCredential.profile_id == profile_id, ProviderProfileCredential.variable_name == variable_name))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Credential variable not found")
+    await db.delete(row)
+    await db.commit()
     return None
 
 

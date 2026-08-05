@@ -35,3 +35,12 @@ class DeepgramAdapter(BaseProviderAdapter):
             content=body,
             is_streaming=False,
         )
+
+    def normalize_usage(self, content: bytes) -> dict[str, int | float]:
+        import json
+        try:
+            payload = json.loads(content)
+        except (ValueError, TypeError):
+            return super().normalize_usage(content)
+        duration = payload.get("metadata", {}).get("duration", 0)
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": int(duration), "estimated_cost": 0.0}

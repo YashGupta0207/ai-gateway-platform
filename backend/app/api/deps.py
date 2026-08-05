@@ -6,7 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import TokenType, decode_token, hash_developer_token
-from app.models.models import Admin, DeveloperToken, DeveloperTokenStatus, ProviderStatus
+from app.models.models import Admin, DeveloperToken, DeveloperTokenStatus, Provider, ProviderProfile, ProviderStatus, TokenProviderAuthorization
+from sqlalchemy import select
 from app.repositories.token_repository import TokenRepository
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -61,7 +62,27 @@ async def get_valid_developer_token(
         from datetime import datetime, timezone
         if datetime.now(timezone.utc) > token.expires_at:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Developer token has expired")
-    if token.provider is None or token.provider.status != ProviderStatus.ENABLED:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Assigned provider is currently disabled")
-
     return token
+
+
+async def resolve_authorized_provider(db: AsyncSession, token: DeveloperToken, requested_name: str | None) -> tuple[Provider, ProviderProfile]:
+    """Resolve the SDK-selected provider before credentials are loaded or decrypted."""
+    if not requested_name:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Missing X-Gateway-Provider header")
+        
+    result = await db.execute(select(Provider).where((Provider.name == requested_name) | (Provider.display_name == requested_name)))
+    provider = result.scalar_one_or_none()
+    if provider is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Provider '{requested_name}' does not exist")
+        
+    if provider.status != ProviderStatus.ENABLED:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Requested provider is currently disabled")
+        
+    authorized = (await db.execute(select(TokenProviderAuthorization.id).where(TokenProviderAuthorization.developer_token_id == token.id, TokenProviderAuthorization.provider_id == provider.id))).scalar_one_or_none()
+    if authorized is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"Developer is not authorized to access provider '{provider.display_name}'.")
+        
+    profile = (await db.execute(select(ProviderProfile).where(ProviderProfile.provider_id == provider.id, ProviderProfile.is_active.is_(True)).order_by(ProviderProfile.is_default.desc(), ProviderProfile.priority.desc()))).scalars().first()
+    if profile is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Requested provider has no active profile")
+    return provider, profile

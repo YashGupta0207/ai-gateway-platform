@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
-from app.api.deps import get_valid_developer_token
+from app.api.deps import get_valid_developer_token, resolve_authorized_provider
 from app.core.database import get_db
 from app.models.models import DeveloperToken
 from app.services.gateway_service import proxy_request
@@ -22,4 +22,5 @@ async def gateway_proxy(
     Handles JSON, streaming, multipart, and raw audio uploads transparently —
     the adapter decides how to interpret the body, not this route.
     """
-    return await proxy_request(db=db, token=token, incoming=request, path=path)
+    provider, profile = await resolve_authorized_provider(db, token, request.headers.get("X-Gateway-Provider"))
+    return await proxy_request(db=db, token=token, provider=provider, profile_id=profile.id, incoming=request, path=path)

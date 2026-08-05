@@ -76,33 +76,39 @@ class Provider(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    tokens: Mapped[list["DeveloperToken"]] = relationship(back_populates="provider")
-    credentials: Mapped[list["ProviderCredential"]] = relationship(
-        back_populates="provider", cascade="all, delete-orphan",
-        order_by="ProviderCredential.created_at",
-    )
+    tokens: Mapped[list["DeveloperToken"]] = relationship(secondary="token_provider_authorizations", back_populates="providers")
 
 
-class ProviderCredential(Base):
-    """
-    One dynamic variable/value pair belonging to a Provider. This table is
-    what makes the Provider module data-driven: adding a brand-new provider
-    with a brand-new set of credential variables never requires a migration
-    or a code change — just new rows here.
-    """
-    __tablename__ = "provider_credentials"
-    __table_args__ = (
-        UniqueConstraint("provider_id", "variable_name", name="uq_provider_credential_variable"),
-    )
+
+
+
+class ProviderProfile(Base):
+    __tablename__ = "provider_profiles"
 
     id: Mapped[uuid.UUID] = _uuid_col()
     provider_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("providers.id", ondelete="CASCADE"), nullable=False, index=True)
-    variable_name: Mapped[str] = mapped_column(String(150), nullable=False)  # plaintext, e.g. "api_key", "connection_string"
-    encrypted_value: Mapped[str] = mapped_column(Text, nullable=False)       # ciphertext only — never plaintext
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    provider: Mapped["Provider"] = relationship(back_populates="credentials")
+    credentials: Mapped[list["ProviderProfileCredential"]] = relationship(back_populates="profile", cascade="all, delete-orphan")
+
+
+class ProviderProfileCredential(Base):
+    __tablename__ = "provider_profile_credentials"
+    __table_args__ = (UniqueConstraint("profile_id", "variable_name", name="uq_profile_credential_variable"),)
+
+    id: Mapped[uuid.UUID] = _uuid_col()
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("provider_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    variable_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    encrypted_value: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    profile: Mapped["ProviderProfile"] = relationship(back_populates="credentials")
 
 
 class DeveloperTokenStatus:
@@ -120,7 +126,7 @@ class DeveloperToken(Base):
     # Retained encrypted solely for privileged admin management. The hash remains
     # the value used for developer authentication.
     encrypted_token: Mapped[str | None] = mapped_column(Text, nullable=True)
-    provider_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("providers.id", ondelete="RESTRICT"), nullable=False)
+
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=DeveloperTokenStatus.ACTIVE)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -144,7 +150,18 @@ class DeveloperToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    provider: Mapped["Provider"] = relationship(back_populates="tokens")
+    providers: Mapped[list["Provider"]] = relationship(secondary="token_provider_authorizations", back_populates="tokens")
+    provider_authorizations: Mapped[list["TokenProviderAuthorization"]] = relationship(cascade="all, delete-orphan")
+
+
+class TokenProviderAuthorization(Base):
+    __tablename__ = "token_provider_authorizations"
+    __table_args__ = (UniqueConstraint("developer_token_id", "provider_id", name="uq_token_provider_authorization"),)
+
+    id: Mapped[uuid.UUID] = _uuid_col()
+    developer_token_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("developer_tokens.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("providers.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ApiRequestLog(Base):

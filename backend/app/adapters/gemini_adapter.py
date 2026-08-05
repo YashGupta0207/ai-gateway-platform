@@ -38,3 +38,15 @@ class GeminiAdapter(BaseProviderAdapter):
             content=body,
             is_streaming=self.is_streaming_path(path, body),
         )
+
+    def normalize_usage(self, content: bytes) -> dict[str, int | float]:
+        import json
+        try:
+            payload = json.loads(content)
+        except (ValueError, TypeError):
+            return super().normalize_usage(content)
+        usage = payload.get("usageMetadata") or {}
+        prompt = usage.get("promptTokenCount", 0)
+        completion = usage.get("candidatesTokenCount", 0)
+        total = usage.get("totalTokenCount", prompt + completion)
+        return {"prompt_tokens": int(prompt), "completion_tokens": int(completion), "total_tokens": int(total), "estimated_cost": 0.0}

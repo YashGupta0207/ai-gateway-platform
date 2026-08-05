@@ -54,3 +54,14 @@ class AzureOpenAIAdapter(BaseProviderAdapter):
             content=body,
             is_streaming=self.is_streaming_path(path, body),
         )
+
+    def normalize_usage(self, content: bytes) -> dict[str, int | float]:
+        try:
+            payload = json.loads(content)
+        except (ValueError, TypeError):
+            return super().normalize_usage(content)
+        usage = payload.get("usage") or {}
+        prompt = usage.get("prompt_tokens", 0)
+        completion = usage.get("completion_tokens", 0)
+        total = usage.get("total_tokens", prompt + completion)
+        return {"prompt_tokens": int(prompt), "completion_tokens": int(completion), "total_tokens": int(total), "estimated_cost": 0.0}

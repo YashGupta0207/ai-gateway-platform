@@ -89,12 +89,12 @@ export const api = {
   enableProvider: (id: string) => request<Provider>(`/providers/${id}/enable`, { method: "POST" }),
   disableProvider: (id: string) => request<Provider>(`/providers/${id}/disable`, { method: "POST" }),
   deleteProvider: (id: string) => request<void>(`/providers/${id}`, { method: "DELETE" }),
-  rotateCredentials: (id: string, pairs: { variable_name: string; value: string }[]) =>
-    request<Provider>(`/providers/${id}/rotate-credentials`, { method: "POST", body: JSON.stringify(pairs) }),
-  deleteCredentialVariable: (id: string, variableName: string) =>
-    request<void>(`/providers/${id}/credentials/${encodeURIComponent(variableName)}`, { method: "DELETE" }),
-  revealCredential: (id: string, variableName: string) =>
-    request<{ variable_name: string; value: string }>(`/providers/${id}/credentials/${encodeURIComponent(variableName)}/reveal`),
+  rotateCredentials: (id: string, profileId: string, pairs: { variable_name: string; value: string }[]) =>
+    request<Profile>(`/providers/${id}/profiles/${profileId}/rotate-credentials`, { method: "POST", body: JSON.stringify(pairs) }),
+  deleteCredentialVariable: (id: string, profileId: string, variableName: string) =>
+    request<void>(`/providers/${id}/profiles/${profileId}/credentials/${encodeURIComponent(variableName)}`, { method: "DELETE" }),
+  revealCredential: (id: string, profileId: string, variableName: string) =>
+    request<{ variable_name: string; value: string }>(`/providers/${id}/profiles/${profileId}/credentials/${encodeURIComponent(variableName)}/reveal`),
 
   listTokens: () => request<DevToken[]>("/tokens"),
   getToken: (id: string, reveal = false) => request<DevToken>(`/tokens/${id}${reveal ? "?reveal=true" : ""}`),
@@ -158,8 +158,20 @@ export interface Provider {
   updated_at: string;
 }
 
-export interface ProviderDetails extends Provider {
+export interface Profile {
+  id: string;
+  name: string;
+  is_active: boolean;
+  is_default: boolean;
+  priority: number;
+}
+
+export interface ProfileDetails extends Profile {
   credentials: { variable_name: string; masked_value: string }[];
+}
+
+export interface ProviderDetails extends Provider {
+  profiles: ProfileDetails[];
   total_requests: number;
   total_tokens_used: number;
 }
@@ -169,8 +181,8 @@ export interface DevToken {
   label: string;
   token_prefix: string;
   temporary_api_key?: string | null;
-  provider_id: string;
-  provider_name: string;
+  provider_ids: string[];
+  provider_names: string[];
   status: "active" | "disabled";
   notes: string | null;
   expires_at: string | null;

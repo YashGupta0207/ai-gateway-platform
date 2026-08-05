@@ -38,3 +38,9 @@ class Completions:
 class Chat:
     def __init__(self, client):
         self.completions = Completions(client)
+        self._client = client
+
+    def __call__(self, *, provider: str, model: str, prompt: str, **kwargs: Any) -> dict:
+        """Convenient provider-aware chat: gateway.chat(provider='openai', ...)."""
+        body = {"model": model, "messages": [{"role": "user", "content": prompt}], **kwargs}
+        return self._client._request("POST", "/chat/completions", json_body=body, provider=provider)

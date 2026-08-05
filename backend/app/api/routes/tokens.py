@@ -10,7 +10,7 @@ from app.api.deps import get_current_admin, require_role
 from app.core.database import get_db
 from app.core.security import generate_developer_token, hash_developer_token
 from app.core.encryption import cipher
-from app.models.models import Admin, AdminRole, ApiRequestLog, DeveloperToken, DeveloperTokenStatus
+from app.models.models import Admin, AdminRole, ApiRequestLog, DeveloperToken, DeveloperTokenStatus, TokenProviderAuthorization
 from app.repositories.provider_repository import ProviderRepository
 from app.repositories.token_repository import TokenRepository
 
@@ -19,20 +19,20 @@ router = APIRouter(prefix="/tokens", tags=["Developer Tokens"])
 
 class TokenCreateRequest(BaseModel):
     label: str
-    provider_id: uuid.UUID
     notes: str | None = None
     expires_at: datetime | None = None
     daily_request_limit: int | None = None
     monthly_request_limit: int | None = None
     daily_token_limit: int | None = None
     monthly_token_limit: int | None = None
+    provider_ids: list[uuid.UUID]
 
 
 class TokenCreatedOut(BaseModel):
     id: uuid.UUID
     label: str
     raw_token: str   # shown ONCE, at creation time only
-    provider_id: uuid.UUID
+    provider_ids: list[uuid.UUID]
     status: str
     expires_at: datetime | None
     created_at: datetime
@@ -43,8 +43,8 @@ class TokenOut(BaseModel):
     label: str
     token_prefix: str
     temporary_api_key: str | None = None
-    provider_id: uuid.UUID
-    provider_name: str
+    provider_ids: list[uuid.UUID]
+    provider_names: list[str]
     status: str
     notes: str | None
     expires_at: datetime | None
@@ -72,7 +72,7 @@ def _to_out(token: DeveloperToken, reveal: bool = False) -> TokenOut:
     return TokenOut(
         id=token.id, label=token.label, token_prefix=token.token_prefix,
         temporary_api_key=cipher.decrypt(token.encrypted_token) if reveal and token.encrypted_token else None,
-        provider_id=token.provider_id, provider_name=token.provider.display_name,
+        provider_ids=[p.id for p in token.providers], provider_names=[p.display_name for p in token.providers],
         status=token.status, notes=token.notes, expires_at=token.expires_at,
         last_used_at=token.last_used_at, created_at=token.created_at,
         created_by=None, last_client_ip=token.last_client_ip, last_user_agent=token.last_user_agent,
@@ -93,9 +93,15 @@ async def create_token(
     admin: Admin = Depends(require_role(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)),
     db: AsyncSession = Depends(get_db),
 ):
-    provider = await ProviderRepository(db).get_by_id(payload.provider_id)
-    if provider is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Provider not found")
+    if not payload.provider_ids:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "At least one provider must be specified")
+    
+    providers = []
+    for pid in payload.provider_ids:
+        provider = await ProviderRepository(db).get_by_id(pid)
+        if provider is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Provider {pid} not found")
+        providers.append(provider)
 
     raw_token = generate_developer_token()
     token = DeveloperToken(
@@ -103,7 +109,7 @@ async def create_token(
         token_hash=hash_developer_token(raw_token),
         token_prefix=raw_token[:12],
         encrypted_token=cipher.encrypt(raw_token),
-        provider_id=provider.id,
+
         notes=payload.notes,
         expires_at=payload.expires_at,
         created_by_admin_id=admin.id,
@@ -113,10 +119,13 @@ async def create_token(
         monthly_token_limit=payload.monthly_token_limit,
     )
     token = await TokenRepository(db).create(token)
+    for authorized_provider_id in set(payload.provider_ids):
+        db.add(TokenProviderAuthorization(developer_token_id=token.id, provider_id=authorized_provider_id))
+    await db.commit()
 
     return TokenCreatedOut(
         id=token.id, label=token.label, raw_token=raw_token,
-        provider_id=token.provider_id, status=token.status, expires_at=token.expires_at, created_at=token.created_at,
+        provider_ids=payload.provider_ids, status=token.status, expires_at=token.expires_at, created_at=token.created_at,
     )
 
 
@@ -132,6 +141,21 @@ async def get_token(token_id: uuid.UUID, reveal: bool = Query(False), admin: Adm
     if token is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Token not found")
     return _to_out(token, reveal=reveal)
+
+
+class ProviderAuthorizationIn(BaseModel):
+    provider_ids: list[uuid.UUID]
+
+
+@router.put("/{token_id}/providers", status_code=status.HTTP_204_NO_CONTENT)
+async def set_token_provider_authorizations(token_id: uuid.UUID, payload: ProviderAuthorizationIn, admin: Admin = Depends(require_role(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)), db: AsyncSession = Depends(get_db)):
+    token = await TokenRepository(db).get_by_id(token_id)
+    if token is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Token not found")
+    await db.execute(TokenProviderAuthorization.__table__.delete().where(TokenProviderAuthorization.developer_token_id == token_id))
+    for provider_id in set(payload.provider_ids):
+        db.add(TokenProviderAuthorization(developer_token_id=token_id, provider_id=provider_id))
+    await db.commit()
 
 
 class RequestLogOut(BaseModel):
@@ -212,7 +236,7 @@ async def regenerate_token(token_id: uuid.UUID, admin: Admin = Depends(require_r
 
     return TokenCreatedOut(
         id=token.id, label=token.label, raw_token=raw_token,
-        provider_id=token.provider_id, status=token.status, expires_at=token.expires_at, created_at=token.created_at,
+        provider_ids=[p.id for p in token.providers], status=token.status, expires_at=token.expires_at, created_at=token.created_at,
     )
 
 

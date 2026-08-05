@@ -18,20 +18,20 @@ export default function ProviderDetails() {
 
   useEffect(refresh, [id]);
 
-  async function reveal(variableName: string) {
+  async function reveal(profileId: string, variableName: string) {
     if (!id) return;
     try {
-      const result = await api.revealCredential(id, variableName);
-      setRevealed((prev) => ({ ...prev, [variableName]: result.value }));
+      const result = await api.revealCredential(id, profileId, variableName);
+      setRevealed((prev) => ({ ...prev, [`${profileId}-${variableName}`]: result.value }));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to reveal credential");
     }
   }
 
-  async function remove(variableName: string) {
+  async function remove(profileId: string, variableName: string) {
     if (!id || !confirm(`Delete variable "${variableName}"?`)) return;
     try {
-      await api.deleteCredentialVariable(id, variableName);
+      await api.deleteCredentialVariable(id, profileId, variableName);
       refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete variable");
@@ -78,42 +78,59 @@ export default function ProviderDetails() {
         <div>Updated: <span className="text-text font-mono">{new Date(provider.updated_at).toLocaleString()}</span></div>
       </div>
 
-      <div className="card overflow-hidden">
-        <div className="px-5 py-4 border-b border-border">
-          <h2 className="text-sm font-medium text-text">Credential variables</h2>
-          <p className="text-xs text-muted mt-1">Only super_admin/admin roles can reveal a value.</p>
-        </div>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-muted text-xs border-b border-border">
-              <th className="px-5 py-3 font-normal">Key</th>
-              <th className="px-5 py-3 font-normal">Value</th>
-              <th className="px-5 py-3 font-normal"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {provider.credentials.map((c) => (
-              <tr key={c.variable_name} className="border-b border-border/50">
-                <td className="px-5 py-3 font-mono text-text">{c.variable_name}</td>
-                <td className="px-5 py-3 font-mono text-xs text-text break-all">
-                  {revealed[c.variable_name] ?? c.masked_value}
-                </td>
-                <td className="px-5 py-3">
-                  <div className="flex gap-3 justify-end">
-                    {revealed[c.variable_name] ? <>
-                      <button onClick={() => setRevealed((values) => { const next = { ...values }; delete next[c.variable_name]; return next; })} className="text-xs text-muted hover:text-accent">Hide</button>
-                      <button onClick={() => navigator.clipboard.writeText(revealed[c.variable_name])} className="text-xs text-muted hover:text-accent">Copy</button>
-                    </> : <button onClick={() => reveal(c.variable_name)} className="text-xs text-muted hover:text-accent">Reveal</button>}
-                    <button onClick={() => remove(c.variable_name)} className="text-xs text-muted hover:text-danger">Delete</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {provider.credentials.length === 0 && (
-              <tr><td colSpan={3} className="px-5 py-6 text-muted text-xs">No credential variables configured.</td></tr>
-            )}
-          </tbody>
-        </table>
+      <div className="space-y-6">
+        <h2 className="text-base font-medium text-text">Profiles</h2>
+        {provider.profiles.map((profile) => (
+          <div key={profile.id} className="card overflow-hidden">
+            <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-3">
+                  <h3 className="text-sm font-medium text-text">{profile.name}</h3>
+                  {profile.is_default && <span className="badge-ok">Default</span>}
+                  {!profile.is_active && <span className="badge-warn">Inactive</span>}
+                </div>
+                <p className="text-xs text-muted mt-1">Priority: {profile.priority}</p>
+              </div>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-muted text-xs border-b border-border">
+                  <th className="px-5 py-3 font-normal">Key</th>
+                  <th className="px-5 py-3 font-normal">Value</th>
+                  <th className="px-5 py-3 font-normal"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {profile.credentials.map((c) => {
+                  const revealKey = `${profile.id}-${c.variable_name}`;
+                  return (
+                    <tr key={c.variable_name} className="border-b border-border/50">
+                      <td className="px-5 py-3 font-mono text-text">{c.variable_name}</td>
+                      <td className="px-5 py-3 font-mono text-xs text-text break-all">
+                        {revealed[revealKey] ?? c.masked_value}
+                      </td>
+                      <td className="px-5 py-3">
+                        <div className="flex gap-3 justify-end">
+                          {revealed[revealKey] ? <>
+                            <button onClick={() => setRevealed((values) => { const next = { ...values }; delete next[revealKey]; return next; })} className="text-xs text-muted hover:text-accent">Hide</button>
+                            <button onClick={() => navigator.clipboard.writeText(revealed[revealKey])} className="text-xs text-muted hover:text-accent">Copy</button>
+                          </> : <button onClick={() => reveal(profile.id, c.variable_name)} className="text-xs text-muted hover:text-accent">Reveal</button>}
+                          <button onClick={() => remove(profile.id, c.variable_name)} className="text-xs text-muted hover:text-danger">Delete</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {profile.credentials.length === 0 && (
+                  <tr><td colSpan={3} className="px-5 py-6 text-muted text-xs">No credential variables configured.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        ))}
+        {provider.profiles.length === 0 && (
+          <div className="card p-6 text-center text-muted text-sm">No profiles configured.</div>
+        )}
       </div>
     </div>
   );

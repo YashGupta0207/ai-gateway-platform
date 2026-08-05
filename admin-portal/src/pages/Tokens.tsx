@@ -12,7 +12,7 @@ export default function Tokens() {
 
   function refresh() {
     api.listTokens().then(setTokens).catch((e) => setError(e.message));
-    api.listProviders().then(setProviders).catch(() => {});
+    api.listProviders().then(setProviders).catch(() => { });
   }
   useEffect(refresh, []);
 
@@ -99,7 +99,7 @@ export default function Tokens() {
             <tr className="text-left text-muted text-xs border-b border-border">
               <th className="px-5 py-3 font-normal">Label</th>
               <th className="px-5 py-3 font-normal">Token</th>
-              <th className="px-5 py-3 font-normal">Provider</th>
+              <th className="px-5 py-3 font-normal">Providers</th>
               <th className="px-5 py-3 font-normal">Status</th>
               <th className="px-5 py-3 font-normal">Requests</th>
               <th className="px-5 py-3 font-normal">Prompt</th>
@@ -116,7 +116,7 @@ export default function Tokens() {
               <tr key={t.id} className="border-b border-border/50">
                 <td className="px-5 py-3 text-text"><Link className="hover:text-accent" to={`/tokens/${t.id}`}>{t.label}</Link></td>
                 <td className="px-5 py-3 font-mono text-xs text-muted">{t.token_prefix}…</td>
-                <td className="px-5 py-3 text-text">{t.provider_name}</td>
+                <td className="px-5 py-3 text-text">{t.provider_names.join(", ")}</td>
                 <td className="px-5 py-3">
                   <span className={t.status === "active" ? "badge-ok" : "badge-warn"}>{t.status}</span>
                 </td>
@@ -154,7 +154,7 @@ function TokenForm({ providers, onCreated, onCancel }: {
   providers: Provider[]; onCreated: (t: CreatedToken) => void; onCancel: () => void;
 }) {
   const [label, setLabel] = useState("");
-  const [providerId, setProviderId] = useState(providers[0]?.id || "");
+  const [providerIds, setProviderIds] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -167,7 +167,7 @@ function TokenForm({ providers, onCreated, onCancel }: {
     setSaving(true);
     try {
       const created = await api.createToken({
-        label, provider_id: providerId, notes: notes || null,
+        label, provider_ids: providerIds, notes: notes || null,
         expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
         daily_request_limit: limits.daily_request_limit ? Number(limits.daily_request_limit) : null,
         monthly_request_limit: limits.monthly_request_limit ? Number(limits.monthly_request_limit) : null,
@@ -190,14 +190,26 @@ function TokenForm({ providers, onCreated, onCancel }: {
           <input required value={label} onChange={(e) => setLabel(e.target.value)}
             className="w-full bg-panelalt border border-border rounded px-3 py-2 text-sm text-text focus:outline-none focus:ring-1 focus:ring-accent" />
         </label>
-        <label className="block">
-          <span className="text-xs text-muted mb-1 block">Provider</span>
-          <select required value={providerId} onChange={(e) => setProviderId(e.target.value)}
-            className="w-full bg-panelalt border border-border rounded px-3 py-2 text-sm text-text focus:outline-none focus:ring-1 focus:ring-accent">
-            <option value="" disabled>Select a provider</option>
-            {providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-        </label>
+        <div className="block">
+          <span className="text-xs text-muted mb-1 block">Allowed Providers</span>
+          <div className="bg-panelalt border border-border rounded p-3 max-h-40 overflow-y-auto space-y-2">
+            {providers.map((p) => (
+              <label key={p.id} className="flex items-center gap-2 text-sm text-text cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={providerIds.includes(p.id)}
+                  onChange={(e) => {
+                    if (e.target.checked) setProviderIds([...providerIds, p.id]);
+                    else setProviderIds(providerIds.filter(id => id !== p.id));
+                  }}
+                  className="rounded border-border bg-panel text-accent focus:ring-accent"
+                />
+                {p.name}
+              </label>
+            ))}
+            {providers.length === 0 && <span className="text-xs text-muted">No providers available</span>}
+          </div>
+        </div>
       </div>
       <div className="grid grid-cols-2 gap-4">
         {[['daily_request_limit', 'Daily request limit'], ['monthly_request_limit', 'Monthly request limit'], ['daily_token_limit', 'Daily token limit'], ['monthly_token_limit', 'Monthly token limit']].map(([key, title]) => (

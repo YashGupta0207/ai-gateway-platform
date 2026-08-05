@@ -14,7 +14,7 @@ class TokenRepository:
     async def get_by_hash(self, token_hash: str) -> DeveloperToken | None:
         result = await self.db.execute(
             select(DeveloperToken)
-            .options(selectinload(DeveloperToken.provider))
+            .options(selectinload(DeveloperToken.providers))
             .where(DeveloperToken.token_hash == token_hash)
         )
         return result.scalar_one_or_none()
@@ -22,7 +22,7 @@ class TokenRepository:
     async def get_by_id(self, token_id: uuid.UUID) -> DeveloperToken | None:
         result = await self.db.execute(
             select(DeveloperToken)
-            .options(selectinload(DeveloperToken.provider))
+            .options(selectinload(DeveloperToken.providers))
             .where(DeveloperToken.id == token_id)
         )
         return result.scalar_one_or_none()
@@ -30,7 +30,7 @@ class TokenRepository:
     async def list_all(self) -> list[DeveloperToken]:
         result = await self.db.execute(
             select(DeveloperToken)
-            .options(selectinload(DeveloperToken.provider))
+            .options(selectinload(DeveloperToken.providers))
             .order_by(DeveloperToken.created_at.desc())
         )
         return list(result.scalars().all())
