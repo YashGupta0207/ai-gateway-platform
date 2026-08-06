@@ -22,10 +22,20 @@ async def gateway_proxy(
     Handles JSON, streaming, multipart, and raw audio uploads transparently —
     the adapter decides how to interpret the body, not this route.
     """
+    tags_header = request.headers.get("X-Gateway-Tags")
+    tags = None
+    if tags_header:
+        import json
+        try:
+            tags = json.loads(tags_header)
+        except json.JSONDecodeError:
+            pass
+            
     provider, profile = await resolve_authorized_provider(
         db, 
         token, 
         request.headers.get("X-Gateway-Provider"),
-        request.headers.get("X-Gateway-Profile")
+        request.headers.get("X-Gateway-Profile"),
+        tags
     )
     return await proxy_request(db=db, token=token, provider=provider, profile_id=profile.id, incoming=request, path=path)

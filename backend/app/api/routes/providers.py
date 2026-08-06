@@ -100,6 +100,7 @@ class ProfileDetailsOut(BaseModel):
     is_active: bool
     is_default: bool
     priority: int
+    tags: dict
     credentials: list[CredentialVariableOut]
 
 
@@ -107,6 +108,7 @@ class ProfileIn(BaseModel):
     name: str
     priority: int = 0
     is_default: bool = False
+    tags: dict = {}
     credentials: list[CredentialPairIn] = []
 
 
@@ -116,6 +118,7 @@ class ProfileOut(BaseModel):
     is_active: bool
     is_default: bool
     priority: int
+    tags: dict
 
 
 def _mask(value: str) -> str:
@@ -204,7 +207,7 @@ async def create_provider(
 
     if payload.profiles:
         for p in payload.profiles:
-            profile = ProviderProfile(provider_id=provider.id, name=p.name.strip(), priority=p.priority, is_default=p.is_default)
+            profile = ProviderProfile(provider_id=provider.id, name=p.name.strip(), priority=p.priority, is_default=p.is_default, tags=p.tags)
             db.add(profile)
             await db.flush()
             for pair in p.credentials:
@@ -229,7 +232,7 @@ async def get_provider(provider_id: uuid.UUID, admin: Admin = Depends(get_curren
         total_credentials += len(cred_rows)
         decrypted = {row.variable_name: cipher.decrypt(row.encrypted_value) for row in cred_rows}
         profile_details.append(ProfileDetailsOut(
-            id=profile.id, name=profile.name, is_active=profile.is_active, is_default=profile.is_default, priority=profile.priority,
+            id=profile.id, name=profile.name, is_active=profile.is_active, is_default=profile.is_default, priority=profile.priority, tags=profile.tags,
             credentials=[CredentialVariableOut(variable_name=name, masked_value=_mask(value)) for name, value in decrypted.items()]
         ))
 
@@ -254,7 +257,7 @@ async def create_profile(provider_id: uuid.UUID, payload: ProfileIn, admin: Admi
     provider = await ProviderRepository(db).get_by_id(provider_id)
     if provider is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Provider not found")
-    profile = ProviderProfile(provider_id=provider_id, name=payload.name.strip(), priority=payload.priority, is_default=payload.is_default)
+    profile = ProviderProfile(provider_id=provider_id, name=payload.name.strip(), priority=payload.priority, is_default=payload.is_default, tags=payload.tags)
     if not profile.name:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Profile name cannot be empty")
     if payload.is_default:
@@ -316,7 +319,7 @@ async def update_provider(
         await db.execute(sa.delete(ProviderProfile).where(ProviderProfile.provider_id == provider.id))
         
         for p in payload.profiles:
-            profile = ProviderProfile(provider_id=provider.id, name=p.name.strip(), priority=p.priority, is_default=p.is_default)
+            profile = ProviderProfile(provider_id=provider.id, name=p.name.strip(), priority=p.priority, is_default=p.is_default, tags=p.tags)
             db.add(profile)
             await db.flush()
             for pair in p.credentials:
