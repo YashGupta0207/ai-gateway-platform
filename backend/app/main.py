@@ -63,6 +63,7 @@ app.include_router(dashboard.router, prefix=settings.API_V1_PREFIX)
 # Gateway routes are NOT versioned under /api/v1 — this is the stable
 # developer-facing surface the SDK talks to.
 app.include_router(gateway.router)
+app.include_router(gateway.ws_router)
 
 
 @app.get("/health", tags=["Health"])

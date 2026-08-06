@@ -1,6 +1,7 @@
 import uuid
+import uuid
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, WebSocket
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,6 +63,35 @@ async def get_valid_developer_token(
         from datetime import datetime, timezone
         if datetime.now(timezone.utc) > token.expires_at:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Developer token has expired")
+    return token
+
+
+async def get_valid_developer_token_ws(
+    websocket: WebSocket,
+    db: AsyncSession,
+) -> DeveloperToken | None:
+    """
+    Validates the developer token for WebSocket connections.
+    The token can be passed as a query parameter (?token=dev_xxx) or in the Authorization header.
+    """
+    token_str = websocket.query_params.get("token") or websocket.headers.get("Authorization")
+    if token_str and token_str.startswith("Bearer "):
+        token_str = token_str.split(" ")[1]
+
+    if not token_str:
+        return None
+
+    token_hash = hash_developer_token(token_str)
+    repo = TokenRepository(db)
+    token = await repo.get_by_hash(token_hash)
+
+    if token is None or token.status != DeveloperTokenStatus.ACTIVE:
+        return None
+
+    if token.expires_at is not None:
+        from datetime import datetime, timezone
+        if datetime.now(timezone.utc) > token.expires_at:
+            return None
     return token
 
 

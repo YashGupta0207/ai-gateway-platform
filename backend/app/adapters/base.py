@@ -70,6 +70,12 @@ class BaseProviderAdapter(ABC):
         """
         raise NotImplementedError
 
+    def build_websocket_request(self, *, incoming: Request, path: str, credentials: dict[str, str]) -> tuple[str, dict[str, str]]:
+        """
+        Return (url, headers) for the upstream WebSocket connection.
+        """
+        raise NotImplementedError("This provider does not support WebSockets")
+
     def is_streaming_path(self, path: str, body: bytes) -> bool:
         """Override to detect streaming requests (e.g. `"stream": true` in body)."""
         return False

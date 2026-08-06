@@ -14,9 +14,11 @@ from datetime import datetime, timezone
 import json
 
 import httpx
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 from starlette.requests import Request
+import websockets
+import asyncio
 
 from app.adapters.registry import registry
 from app.core.encryption import cipher, EncryptionError
@@ -169,6 +171,95 @@ async def _enforce_limits(db: AsyncSession, token: DeveloperToken) -> None:
     for limit, current, message in checks:
         if limit is not None and current >= limit:
             raise HTTPException(status_code=429, detail=message)
+
+
+async def proxy_websocket(
+    *, db: AsyncSession, token: DeveloperToken, provider: Provider, profile_id, websocket: WebSocket, path: str,
+) -> None:
+    adapter = registry.get_or_generic(provider.adapter_key)
+    client_ip = websocket.client.host if websocket.client else None
+    user_agent = websocket.headers.get("user-agent")
+    
+    try:
+        await _enforce_limits(db, token)
+    except HTTPException as exc:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=exc.detail)
+        return
+
+    try:
+        cred_rows = (await db.execute(select(ProviderProfileCredential).where(ProviderProfileCredential.profile_id == profile_id))).scalars().all()
+        credentials = {row.variable_name: cipher.decrypt(row.encrypted_value) for row in cred_rows}
+    except EncryptionError as exc:
+        await _log(db, token, provider.id, path, "WEBSOCKET", None, None, str(exc), ip_address=client_ip, user_agent=user_agent)
+        await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason="Credential decryption failed")
+        return
+
+    try:
+        upstream_url, upstream_headers = adapter.build_websocket_request(incoming=websocket, path=path, credentials=credentials)
+    except NotImplementedError as exc:
+        await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA, reason=str(exc))
+        return
+    except ValueError as exc:
+        await _log(db, token, provider.id, path, "WEBSOCKET", None, None, str(exc), ip_address=client_ip, user_agent=user_agent)
+        await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason=f"Provider misconfigured: {exc}")
+        return
+
+    start = time.perf_counter()
+    
+    try:
+        async with websockets.connect(upstream_url, additional_headers=upstream_headers) as upstream_ws:
+            token.last_used_at = datetime.now(timezone.utc)
+            token.last_client_ip = client_ip
+            token.last_user_agent = user_agent
+            await db.commit()
+
+            async def forward_client_to_upstream():
+                try:
+                    while True:
+                        message = await websocket.receive()
+                        if "text" in message:
+                            await upstream_ws.send(message["text"])
+                        elif "bytes" in message:
+                            await upstream_ws.send(message["bytes"])
+                except WebSocketDisconnect:
+                    pass
+                except Exception as e:
+                    pass
+                finally:
+                    await upstream_ws.close()
+
+            async def forward_upstream_to_client():
+                try:
+                    async for message in upstream_ws:
+                        if isinstance(message, str):
+                            await websocket.send_text(message)
+                        else:
+                            await websocket.send_bytes(message)
+                except websockets.exceptions.ConnectionClosed:
+                    pass
+                except Exception as e:
+                    pass
+                finally:
+                    try:
+                        await websocket.close()
+                    except RuntimeError:
+                        pass
+
+            await asyncio.gather(
+                forward_client_to_upstream(),
+                forward_upstream_to_client(),
+            )
+            
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            await _log(db, token, provider.id, path, "WEBSOCKET", 101, latency_ms, None, ip_address=client_ip, user_agent=user_agent)
+            
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        await _log(db, token, provider.id, path, "WEBSOCKET", None, latency_ms, str(exc), ip_address=client_ip, user_agent=user_agent)
+        try:
+            await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason="Upstream connection failed")
+        except RuntimeError:
+            pass
 
 
 
