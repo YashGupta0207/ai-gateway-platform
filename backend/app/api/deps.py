@@ -65,7 +65,7 @@ async def get_valid_developer_token(
     return token
 
 
-async def resolve_authorized_provider(db: AsyncSession, token: DeveloperToken, requested_name: str | None) -> tuple[Provider, ProviderProfile]:
+async def resolve_authorized_provider(db: AsyncSession, token: DeveloperToken, requested_name: str | None, requested_profile_name: str | None = None) -> tuple[Provider, ProviderProfile]:
     """Resolve the SDK-selected provider before credentials are loaded or decrypted."""
     if not requested_name:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Missing X-Gateway-Provider header")
@@ -82,7 +82,24 @@ async def resolve_authorized_provider(db: AsyncSession, token: DeveloperToken, r
     if authorized is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"Developer is not authorized to access provider '{provider.display_name}'.")
         
-    profile = (await db.execute(select(ProviderProfile).where(ProviderProfile.provider_id == provider.id, ProviderProfile.is_active.is_(True)).order_by(ProviderProfile.is_default.desc(), ProviderProfile.priority.desc()))).scalars().first()
+    if requested_profile_name:
+        profile = (await db.execute(
+            select(ProviderProfile)
+            .where(
+                ProviderProfile.provider_id == provider.id, 
+                ProviderProfile.is_active.is_(True),
+                ProviderProfile.name == requested_profile_name
+            )
+        )).scalars().first()
+        if profile is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Requested profile '{requested_profile_name}' does not exist or is inactive for this provider")
+    else:
+        profile = (await db.execute(
+            select(ProviderProfile)
+            .where(ProviderProfile.provider_id == provider.id, ProviderProfile.is_active.is_(True))
+            .order_by(ProviderProfile.is_default.desc(), ProviderProfile.priority.desc())
+        )).scalars().first()
+        
     if profile is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Requested provider has no active profile")
     return provider, profile

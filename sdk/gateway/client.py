@@ -22,9 +22,11 @@ class GatewayClient:
             headers={"Authorization": f"Bearer {key}"}
         )
         
-    def _request(self, method: str, path: str, provider: str, api_key: Optional[str] = None, **kwargs) -> httpx.Response:
+    def _request(self, method: str, path: str, provider: str, api_key: Optional[str] = None, profile: Optional[str] = None, **kwargs) -> httpx.Response:
         headers = kwargs.pop("headers", {})
         headers["X-Gateway-Provider"] = provider
+        if profile:
+            headers["X-Gateway-Profile"] = profile
         
         client = self._get_client(api_key)
         response = client.request(method, f"/api/v1/gateway{path}", headers=headers, **kwargs)
@@ -32,9 +34,11 @@ class GatewayClient:
             raise GatewayError(response.status_code, response.text)
         return response
 
-    def _stream(self, method: str, path: str, provider: str, api_key: Optional[str] = None, **kwargs) -> Generator[bytes, None, None]:
+    def _stream(self, method: str, path: str, provider: str, api_key: Optional[str] = None, profile: Optional[str] = None, **kwargs) -> Generator[bytes, None, None]:
         headers = kwargs.pop("headers", {})
         headers["X-Gateway-Provider"] = provider
+        if profile:
+            headers["X-Gateway-Profile"] = profile
         
         client = self._get_client(api_key)
         with client.stream(method, f"/api/v1/gateway{path}", headers=headers, **kwargs) as response:
@@ -44,7 +48,7 @@ class GatewayClient:
             for chunk in response.iter_bytes():
                 yield chunk
 
-    def chat(self, provider: str, api_key: Optional[str] = None, prompt: Optional[str] = None, messages: Optional[list[dict]] = None, model: Optional[str] = None, stream: bool = False, **kwargs) -> Any:
+    def chat(self, provider: str, api_key: Optional[str] = None, profile: Optional[str] = None, prompt: Optional[str] = None, messages: Optional[list[dict]] = None, model: Optional[str] = None, stream: bool = False, **kwargs) -> Any:
         if prompt and not messages:
             messages = [{"role": "user", "content": prompt}]
             
@@ -55,27 +59,27 @@ class GatewayClient:
         
         if stream:
             payload["stream"] = True
-            return self._stream("POST", "/chat/completions", provider, api_key=api_key, json=payload)
+            return self._stream("POST", "/chat/completions", provider, api_key=api_key, profile=profile, json=payload)
         
-        response = self._request("POST", "/chat/completions", provider, api_key=api_key, json=payload)
+        response = self._request("POST", "/chat/completions", provider, api_key=api_key, profile=profile, json=payload)
         return response.json()
 
-    def transcribe(self, provider: str, file: str, api_key: Optional[str] = None, mimetype: str = "audio/wav", **kwargs) -> Any:
+    def transcribe(self, provider: str, file: str, api_key: Optional[str] = None, profile: Optional[str] = None, mimetype: str = "audio/wav", **kwargs) -> Any:
         with open(file, "rb") as f:
             content = f.read()
             
         headers = {"Content-Type": mimetype}
-        response = self._request("POST", "/listen", provider, api_key=api_key, content=content, headers=headers, params=kwargs)
+        response = self._request("POST", "/listen", provider, api_key=api_key, profile=profile, content=content, headers=headers, params=kwargs)
         return response.json()
         
-    def query(self, provider: str, query: str, api_key: Optional[str] = None, **kwargs) -> Any:
+    def query(self, provider: str, query: str, api_key: Optional[str] = None, profile: Optional[str] = None, **kwargs) -> Any:
         payload = {"query": query}
         payload.update(kwargs)
-        response = self._request("POST", "/query", provider, api_key=api_key, json=payload)
+        response = self._request("POST", "/query", provider, api_key=api_key, profile=profile, json=payload)
         return response.json()
         
-    def request(self, provider: str, method: str, path: str, api_key: Optional[str] = None, **kwargs) -> Any:
-        response = self._request(method, path, provider, api_key=api_key, **kwargs)
+    def request(self, provider: str, method: str, path: str, api_key: Optional[str] = None, profile: Optional[str] = None, **kwargs) -> Any:
+        response = self._request(method, path, provider, api_key=api_key, profile=profile, **kwargs)
         try:
             return response.json()
         except ValueError:
