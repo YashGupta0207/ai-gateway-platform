@@ -164,3 +164,88 @@ class AzureSpeechAdapter(BaseProviderAdapter):
         }
         
         return json.dumps(openai_response).encode("utf-8"), usage
+
+    async def handle_live_audio_websocket(self, *, websocket, credentials: dict[str, str], format: str, sample_rate: int) -> None:
+        import azure.cognitiveservices.speech as speechsdk
+        import asyncio
+        import json
+        
+        region = self.credential_value(credentials, 'region', 'azure_region')
+        api_key = self.credential_value(credentials, 'api_key', 'azure_key', 'azure_speech_key')
+        
+        speech_config = speechsdk.SpeechConfig(subscription=api_key, region=region)
+        speech_config.set_property(speechsdk.PropertyId.SpeechServiceResponse_OutputFormatOption, "Detailed")
+        
+        # Configure format and sample rate
+        stream_format = speechsdk.audio.AudioStreamFormat(samples_per_second=sample_rate, bits_per_sample=16, channels=1)
+        push_stream = speechsdk.audio.PushAudioInputStream(stream_format=stream_format)
+        audio_config = speechsdk.audio.AudioConfig(stream=push_stream)
+        
+        speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
+        
+        loop = asyncio.get_running_loop()
+        
+        def handle_event(evt, is_final):
+            try:
+                result = evt.result
+                if result.reason == speechsdk.ResultReason.RecognizedSpeech or result.reason == speechsdk.ResultReason.RecognizingSpeech:
+                    # Parse detailed JSON if available
+                    words = []
+                    confidence = 0.0
+                    
+                    if result.properties:
+                        json_str = result.properties.get(speechsdk.PropertyId.SpeechServiceResponse_JsonResult)
+                        if json_str:
+                            try:
+                                parsed = json.loads(json_str)
+                                if "NBest" in parsed and len(parsed["NBest"]) > 0:
+                                    best = parsed["NBest"][0]
+                                    confidence = best.get("Confidence", 0.0)
+                                    if "Words" in best:
+                                        for w in best["Words"]:
+                                            # Azure offset is in 100-nanosecond units
+                                            start = w.get("Offset", 0) / 10_000_000
+                                            duration = w.get("Duration", 0) / 10_000_000
+                                            words.append({
+                                                "word": w.get("Word", ""),
+                                                "start": start,
+                                                "end": start + duration,
+                                                "confidence": w.get("Confidence", 0.0)
+                                            })
+                            except json.JSONDecodeError:
+                                pass
+                    
+                    response = {
+                        "type": "transcript",
+                        "is_final": is_final,
+                        "speaker": "Speaker 1", # Azure doesn't provide speaker diarization in standard recognition
+                        "text": result.text,
+                        "confidence": confidence,
+                        "words": words if is_final else []
+                    }
+                    
+                    # Send to websocket safely from another thread
+                    asyncio.run_coroutine_threadsafe(websocket.send_json(response), loop)
+            except Exception as e:
+                print(f"Error handling Azure event: {e}")
+                
+        speech_recognizer.recognizing.connect(lambda evt: handle_event(evt, False))
+        speech_recognizer.recognized.connect(lambda evt: handle_event(evt, True))
+        
+        speech_recognizer.start_continuous_recognition()
+        
+        try:
+            while True:
+                message = await websocket.receive()
+                if "text" in message:
+                    try:
+                        data = json.loads(message["text"])
+                        if data.get("text") == "stop":
+                            break
+                    except json.JSONDecodeError:
+                        pass
+                elif "bytes" in message:
+                    push_stream.write(message["bytes"])
+        finally:
+            speech_recognizer.stop_continuous_recognition()
+            push_stream.close()

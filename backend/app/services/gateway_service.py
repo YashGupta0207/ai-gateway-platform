@@ -408,4 +408,54 @@ async def proxy_websocket(
             pass
 
 
+async def proxy_live_audio_websocket(
+    *, db: AsyncSession, token: DeveloperToken, provider: Provider, profile_id, websocket: WebSocket, format: str, sample_rate: int
+) -> None:
+    adapter = registry.get_or_generic(provider.adapter_key)
+    client_ip = websocket.client.host if websocket.client else None
+    user_agent = websocket.headers.get("user-agent")
+    
+    try:
+        await _enforce_limits(db, token)
+    except HTTPException as exc:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=exc.detail)
+        return
+
+    try:
+        cred_rows = (await db.execute(select(ProviderProfileCredential).where(ProviderProfileCredential.profile_id == profile_id))).scalars().all()
+        credentials = {row.variable_name: cipher.decrypt(row.encrypted_value) for row in cred_rows}
+    except EncryptionError as exc:
+        await _log(db, token, provider.id, "/ws/live", "WEBSOCKET", None, None, str(exc), ip_address=client_ip, user_agent=user_agent)
+        await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason="Credential decryption failed")
+        return
+
+    start = time.perf_counter()
+    
+    try:
+        token.last_used_at = datetime.now(timezone.utc)
+        token.last_client_ip = client_ip
+        token.last_user_agent = user_agent
+        await db.commit()
+
+        await adapter.handle_live_audio_websocket(
+            websocket=websocket, 
+            credentials=credentials, 
+            format=format, 
+            sample_rate=sample_rate
+        )
+        
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        await _log(db, token, provider.id, "/ws/live", "WEBSOCKET", 101, latency_ms, None, ip_address=client_ip, user_agent=user_agent)
+            
+    except NotImplementedError as exc:
+        await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA, reason=str(exc))
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        await _log(db, token, provider.id, "/ws/live", "WEBSOCKET", None, latency_ms, str(exc), ip_address=client_ip, user_agent=user_agent)
+        try:
+            await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason="Upstream connection failed")
+        except RuntimeError:
+            pass
+
+
 

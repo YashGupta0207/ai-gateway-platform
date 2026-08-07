@@ -131,3 +131,51 @@ async def gateway_websocket_proxy(
     await proxy_websocket(
         db=db, token=token, provider=provider, profile_id=profile.id, websocket=websocket, path="listen"
     )
+
+
+@ws_router.websocket("/ws/live")
+async def gateway_live_audio_websocket(
+    websocket: WebSocket,
+    db: AsyncSession = Depends(get_db),
+):
+    await websocket.accept()
+    token = await get_valid_developer_token_ws(websocket, db)
+    if not token:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid or missing token")
+        return
+
+    tags_header = websocket.headers.get("X-Gateway-Tags")
+    tags = None
+    if tags_header:
+        import json
+        try:
+            tags = json.loads(tags_header)
+        except json.JSONDecodeError:
+            pass
+
+    requested_name = websocket.headers.get("X-Gateway-Provider") or websocket.query_params.get("provider")
+    requested_profile_name = websocket.headers.get("X-Gateway-Profile") or websocket.query_params.get("profile")
+
+    try:
+        provider, profile = await resolve_authorized_provider(
+            db, 
+            token, 
+            requested_name,
+            requested_profile_name,
+            tags
+        )
+    except Exception as e:
+        error_msg = str(e.detail) if hasattr(e, 'detail') else str(e)
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=error_msg)
+        return
+
+    format = websocket.query_params.get("format", "linear16")
+    try:
+        sample_rate = int(websocket.query_params.get("sample_rate", "16000"))
+    except ValueError:
+        sample_rate = 16000
+
+    from app.services.gateway_service import proxy_live_audio_websocket
+    await proxy_live_audio_websocket(
+        db=db, token=token, provider=provider, profile_id=profile.id, websocket=websocket, format=format, sample_rate=sample_rate
+    )

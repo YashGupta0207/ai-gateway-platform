@@ -9,6 +9,7 @@ from app.adapters.openai_adapter import OpenAIAdapter
 from app.adapters.azure_openai_adapter import AzureOpenAIAdapter
 from app.adapters.gemini_adapter import GeminiAdapter
 from app.adapters.azure_speech_adapter import AzureSpeechAdapter
+from app.adapters.deepgram_adapter import DeepgramAdapter
 from app.adapters.generic_adapter import GenericAdapter
 
 
@@ -43,4 +44,5 @@ registry.register(OpenAIAdapter())
 registry.register(AzureOpenAIAdapter())
 registry.register(GeminiAdapter())
 registry.register(AzureSpeechAdapter())
+registry.register(DeepgramAdapter())
 registry.register(GenericAdapter())

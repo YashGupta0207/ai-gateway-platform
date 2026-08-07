@@ -76,6 +76,12 @@ class BaseProviderAdapter(ABC):
         """
         raise NotImplementedError("This provider does not support WebSockets")
 
+    async def handle_live_audio_websocket(self, *, websocket, credentials: dict[str, str], format: str, sample_rate: int) -> None:
+        """
+        Handle a live audio WebSocket connection for this provider.
+        """
+        raise NotImplementedError(f"{self.display_name} does not support live audio WebSockets.")
+
     async def build_chat_request(self, *, incoming: Request, body: bytes, credentials: dict[str, str]) -> BuiltRequest:
         """
         Translate an OpenAI-style /chat/completions request to the provider's format.
