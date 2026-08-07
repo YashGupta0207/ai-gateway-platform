@@ -23,7 +23,7 @@ class DeepgramAdapter(BaseProviderAdapter):
     async def build_request(self, *, incoming: Request, path: str, body: bytes, credentials: dict[str, str]) -> BuiltRequest:
         raise NotImplementedError("Deepgram REST API not fully implemented in this adapter yet.")
 
-    async def handle_live_audio_websocket(self, *, websocket, credentials: dict[str, str], format: str, sample_rate: int) -> None:
+    async def handle_live_audio_websocket(self, *, websocket, credentials: dict[str, str], format: str, sample_rate: int) -> dict[str, int | float]:
         api_key = self.credential_value(credentials, 'api_key', 'deepgram_key')
         
         # Map linear16 to Deepgram's encoding
@@ -35,8 +35,11 @@ class DeepgramAdapter(BaseProviderAdapter):
             "Authorization": f"Token {api_key}"
         }
         
+        total_bytes = 0
+        
         async with websockets.connect(url, additional_headers=headers) as upstream_ws:
             async def forward_client_to_upstream():
+                nonlocal total_bytes
                 try:
                     while True:
                         message = await websocket.receive()
@@ -50,6 +53,7 @@ class DeepgramAdapter(BaseProviderAdapter):
                             except json.JSONDecodeError:
                                 pass
                         elif "bytes" in message:
+                            total_bytes += len(message["bytes"])
                             await upstream_ws.send(message["bytes"])
                 except Exception:
                     pass
@@ -102,3 +106,6 @@ class DeepgramAdapter(BaseProviderAdapter):
                 forward_client_to_upstream(),
                 forward_upstream_to_client(),
             )
+            
+        duration_seconds = total_bytes / (sample_rate * 2) if format == "linear16" else total_bytes / sample_rate
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": int(duration_seconds), "estimated_cost": 0.0}

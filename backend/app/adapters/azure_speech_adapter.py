@@ -165,7 +165,7 @@ class AzureSpeechAdapter(BaseProviderAdapter):
         
         return json.dumps(openai_response).encode("utf-8"), usage
 
-    async def handle_live_audio_websocket(self, *, websocket, credentials: dict[str, str], format: str, sample_rate: int) -> None:
+    async def handle_live_audio_websocket(self, *, websocket, credentials: dict[str, str], format: str, sample_rate: int) -> dict[str, int | float]:
         import azure.cognitiveservices.speech as speechsdk
         import asyncio
         import json
@@ -234,6 +234,7 @@ class AzureSpeechAdapter(BaseProviderAdapter):
         
         speech_recognizer.start_continuous_recognition()
         
+        total_bytes = 0
         try:
             while True:
                 message = await websocket.receive()
@@ -245,7 +246,11 @@ class AzureSpeechAdapter(BaseProviderAdapter):
                     except json.JSONDecodeError:
                         pass
                 elif "bytes" in message:
+                    total_bytes += len(message["bytes"])
                     push_stream.write(message["bytes"])
         finally:
             speech_recognizer.stop_continuous_recognition()
             push_stream.close()
+            
+        duration_seconds = total_bytes / (sample_rate * 2) if format == "linear16" else total_bytes / sample_rate
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": int(duration_seconds), "estimated_cost": 0.0}

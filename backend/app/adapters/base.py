@@ -76,9 +76,10 @@ class BaseProviderAdapter(ABC):
         """
         raise NotImplementedError("This provider does not support WebSockets")
 
-    async def handle_live_audio_websocket(self, *, websocket, credentials: dict[str, str], format: str, sample_rate: int) -> None:
+    async def handle_live_audio_websocket(self, *, websocket, credentials: dict[str, str], format: str, sample_rate: int) -> dict[str, int | float]:
         """
         Handle a live audio WebSocket connection for this provider.
+        Returns a usage dictionary.
         """
         raise NotImplementedError(f"{self.display_name} does not support live audio WebSockets.")
 

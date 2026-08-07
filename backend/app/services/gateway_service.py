@@ -437,7 +437,7 @@ async def proxy_live_audio_websocket(
         token.last_user_agent = user_agent
         await db.commit()
 
-        await adapter.handle_live_audio_websocket(
+        usage = await adapter.handle_live_audio_websocket(
             websocket=websocket, 
             credentials=credentials, 
             format=format, 
@@ -445,7 +445,7 @@ async def proxy_live_audio_websocket(
         )
         
         latency_ms = int((time.perf_counter() - start) * 1000)
-        await _log(db, token, provider.id, "/ws/live", "WEBSOCKET", 101, latency_ms, None, ip_address=client_ip, user_agent=user_agent)
+        await _log(db, token, provider.id, "/ws/live", "WEBSOCKET", 101, latency_ms, None, ip_address=client_ip, user_agent=user_agent, usage=usage)
             
     except NotImplementedError as exc:
         await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA, reason=str(exc))
