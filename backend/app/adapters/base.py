@@ -76,6 +76,32 @@ class BaseProviderAdapter(ABC):
         """
         raise NotImplementedError("This provider does not support WebSockets")
 
+    async def build_chat_request(self, *, incoming: Request, body: bytes, credentials: dict[str, str]) -> BuiltRequest:
+        """
+        Translate an OpenAI-style /chat/completions request to the provider's format.
+        """
+        raise NotImplementedError(f"{self.display_name} does not support chat completions translation.")
+
+    def normalize_chat_response(self, content: bytes) -> tuple[bytes, dict[str, int | float]]:
+        """
+        Translate the provider's chat response back to OpenAI-style format.
+        Returns (normalized_content_bytes, usage_dict).
+        """
+        raise NotImplementedError(f"{self.display_name} does not support chat response normalization.")
+
+    async def build_audio_request(self, *, incoming: Request, body: bytes, credentials: dict[str, str]) -> BuiltRequest:
+        """
+        Translate an OpenAI-style /audio/transcriptions request to the provider's format.
+        """
+        raise NotImplementedError(f"{self.display_name} does not support audio transcriptions translation.")
+
+    def normalize_audio_response(self, content: bytes) -> tuple[bytes, dict[str, int | float]]:
+        """
+        Translate the provider's audio response back to OpenAI-style format.
+        Returns (normalized_content_bytes, usage_dict).
+        """
+        raise NotImplementedError(f"{self.display_name} does not support audio response normalization.")
+
     def is_streaming_path(self, path: str, body: bytes) -> bool:
         """Override to detect streaming requests (e.g. `"stream": true` in body)."""
         return False

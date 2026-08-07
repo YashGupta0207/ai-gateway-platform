@@ -111,6 +111,152 @@ async def proxy_request(
     )
 
 
+async def proxy_chat_request(
+    *, db: AsyncSession, token: DeveloperToken, provider: Provider, profile_id, incoming: Request
+) -> Response:
+    adapter = registry.get_or_generic(provider.adapter_key)
+    client_ip = incoming.client.host if incoming.client else None
+    user_agent = incoming.headers.get("user-agent")
+    await _enforce_limits(db, token)
+
+    try:
+        cred_rows = (await db.execute(select(ProviderProfileCredential).where(ProviderProfileCredential.profile_id == profile_id))).scalars().all()
+        credentials = {row.variable_name: cipher.decrypt(row.encrypted_value) for row in cred_rows}
+    except EncryptionError as exc:
+        await _log(db, token, provider.id, "/chat/completions", incoming.method, None, None, str(exc), ip_address=client_ip, user_agent=user_agent)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Credential decryption failed") from exc
+
+    body = await incoming.body()
+    request_size = len(body)
+
+    try:
+        built = await adapter.build_chat_request(incoming=incoming, body=body, credentials=credentials)
+    except NotImplementedError as exc:
+        await _log(db, token, provider.id, "/chat/completions", incoming.method, None, None, str(exc), request_size, ip_address=client_ip, user_agent=user_agent)
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc)) from exc
+    except ValueError as exc:
+        await _log(db, token, provider.id, "/chat/completions", incoming.method, None, None, str(exc), request_size, ip_address=client_ip, user_agent=user_agent)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Provider misconfigured: {exc}") from exc
+
+    start = time.perf_counter()
+    try:
+        upstream = await adapter.send(_client, built)
+    except httpx.HTTPError as exc:
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        await _log(db, token, provider.id, "/chat/completions", incoming.method, None, latency_ms, str(exc),
+                    request_size, ip_address=client_ip, user_agent=user_agent)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Upstream provider request failed: {exc}") from exc
+
+    latency_ms = int((time.perf_counter() - start) * 1000)
+
+    token.last_used_at = datetime.now(timezone.utc)
+    token.last_client_ip = client_ip
+    token.last_user_agent = user_agent
+    await db.commit()
+
+    if built.is_streaming:
+        async def _stream():
+            response_bytes = 0
+            try:
+                async for chunk in upstream.aiter_raw():
+                    response_bytes += len(chunk)
+                    yield chunk
+            finally:
+                await upstream.aclose()
+                await _log(db, token, provider.id, "/chat/completions", incoming.method, upstream.status_code,
+                            latency_ms, None, request_size, response_bytes, ip_address=client_ip,
+                            user_agent=user_agent, is_streaming=True)
+
+        return StreamingResponse(
+            _stream(),
+            status_code=upstream.status_code,
+            media_type=upstream.headers.get("content-type"),
+        )
+
+    content = await upstream.aread()
+    await upstream.aclose()
+    
+    try:
+        normalized_content, usage = adapter.normalize_chat_response(content)
+    except NotImplementedError:
+        normalized_content = content
+        usage = adapter.normalize_usage(content)
+        
+    await _log(db, token, provider.id, "/chat/completions", incoming.method, upstream.status_code,
+                latency_ms, None, request_size, len(normalized_content), ip_address=client_ip,
+                user_agent=user_agent, usage=usage)
+
+    return Response(
+        content=normalized_content,
+        status_code=upstream.status_code,
+        media_type="application/json",
+    )
+
+
+async def proxy_audio_request(
+    *, db: AsyncSession, token: DeveloperToken, provider: Provider, profile_id, incoming: Request
+) -> Response:
+    adapter = registry.get_or_generic(provider.adapter_key)
+    client_ip = incoming.client.host if incoming.client else None
+    user_agent = incoming.headers.get("user-agent")
+    await _enforce_limits(db, token)
+
+    try:
+        cred_rows = (await db.execute(select(ProviderProfileCredential).where(ProviderProfileCredential.profile_id == profile_id))).scalars().all()
+        credentials = {row.variable_name: cipher.decrypt(row.encrypted_value) for row in cred_rows}
+    except EncryptionError as exc:
+        await _log(db, token, provider.id, "/audio/transcriptions", incoming.method, None, None, str(exc), ip_address=client_ip, user_agent=user_agent)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Credential decryption failed") from exc
+
+    body = await incoming.body()
+    request_size = len(body)
+
+    try:
+        built = await adapter.build_audio_request(incoming=incoming, body=body, credentials=credentials)
+    except NotImplementedError as exc:
+        await _log(db, token, provider.id, "/audio/transcriptions", incoming.method, None, None, str(exc), request_size, ip_address=client_ip, user_agent=user_agent)
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc)) from exc
+    except ValueError as exc:
+        await _log(db, token, provider.id, "/audio/transcriptions", incoming.method, None, None, str(exc), request_size, ip_address=client_ip, user_agent=user_agent)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Provider misconfigured: {exc}") from exc
+
+    start = time.perf_counter()
+    try:
+        upstream = await adapter.send(_client, built)
+    except httpx.HTTPError as exc:
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        await _log(db, token, provider.id, "/audio/transcriptions", incoming.method, None, latency_ms, str(exc),
+                    request_size, ip_address=client_ip, user_agent=user_agent)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Upstream provider request failed: {exc}") from exc
+
+    latency_ms = int((time.perf_counter() - start) * 1000)
+
+    token.last_used_at = datetime.now(timezone.utc)
+    token.last_client_ip = client_ip
+    token.last_user_agent = user_agent
+    await db.commit()
+
+    content = await upstream.aread()
+    await upstream.aclose()
+    
+    try:
+        normalized_content, usage = adapter.normalize_audio_response(content)
+    except NotImplementedError:
+        normalized_content = content
+        usage = adapter.normalize_usage(content)
+        
+    await _log(db, token, provider.id, "/audio/transcriptions", incoming.method, upstream.status_code,
+                latency_ms, None, request_size, len(normalized_content), ip_address=client_ip,
+                user_agent=user_agent, usage=usage)
+
+    return Response(
+        content=normalized_content,
+        status_code=upstream.status_code,
+        media_type="application/json",
+    )
+
+
+
 async def _log(db, token, provider_id, path, method, status_code, latency_ms,
                 error_message, request_size=None, response_size=None, ip_address=None,
                 user_agent=None, is_streaming=False, usage=None):

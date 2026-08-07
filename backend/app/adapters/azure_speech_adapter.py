@@ -82,3 +82,56 @@ class AzureSpeechAdapter(BaseProviderAdapter):
         duration_seconds = duration_ticks / 10_000_000
         
         return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": int(duration_seconds), "estimated_cost": 0.0}
+
+    async def build_audio_request(self, *, incoming: Request, body: bytes, credentials: dict[str, str]) -> BuiltRequest:
+        form = await incoming.form()
+        file_field = form.get("file")
+        if not file_field or not hasattr(file_field, "read"):
+            raise ValueError("Missing 'file' in multipart form data")
+            
+        audio_bytes = await file_field.read()
+        
+        region = self.credential_value(credentials, 'region', 'azure_region')
+        api_key = self.credential_value(credentials, 'api_key', 'azure_key', 'azure_speech_key')
+        
+        base_url = f"https://{region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1"
+        
+        headers = {
+            "Ocp-Apim-Subscription-Key": api_key,
+            "Content-Type": file_field.content_type or "audio/wav",
+            "Accept": "application/json",
+        }
+        
+        params = dict(incoming.query_params)
+        if "language" not in params:
+            language = form.get("language")
+            if language and isinstance(language, str):
+                params["language"] = language
+            else:
+                params["language"] = "en-US"
+                
+        return BuiltRequest(
+            method="POST",
+            url=base_url,
+            headers=headers,
+            params=params,
+            content=audio_bytes,
+            is_streaming=False,
+        )
+
+    def normalize_audio_response(self, content: bytes) -> tuple[bytes, dict[str, int | float]]:
+        import json
+        try:
+            payload = json.loads(content)
+        except (ValueError, TypeError):
+            return content, self.normalize_usage(content)
+            
+        usage = self.normalize_usage(content)
+        
+        text = payload.get("DisplayText", "")
+        
+        openai_response = {
+            "text": text
+        }
+        
+        return json.dumps(openai_response).encode("utf-8"), usage

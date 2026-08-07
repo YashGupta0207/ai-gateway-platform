@@ -65,3 +65,15 @@ class AzureOpenAIAdapter(BaseProviderAdapter):
         completion = usage.get("completion_tokens", 0)
         total = usage.get("total_tokens", prompt + completion)
         return {"prompt_tokens": int(prompt), "completion_tokens": int(completion), "total_tokens": int(total), "estimated_cost": 0.0}
+
+    async def build_chat_request(self, *, incoming: Request, body: bytes, credentials: dict[str, str]) -> BuiltRequest:
+        return await self.build_request(incoming=incoming, path="chat/completions", body=body, credentials=credentials)
+
+    def normalize_chat_response(self, content: bytes) -> tuple[bytes, dict[str, int | float]]:
+        return content, self.normalize_usage(content)
+
+    async def build_audio_request(self, *, incoming: Request, body: bytes, credentials: dict[str, str]) -> BuiltRequest:
+        return await self.build_request(incoming=incoming, path="audio/transcriptions", body=body, credentials=credentials)
+
+    def normalize_audio_response(self, content: bytes) -> tuple[bytes, dict[str, int | float]]:
+        return content, self.normalize_usage(content)
