@@ -26,7 +26,13 @@ class AzureSpeechAdapter(BaseProviderAdapter):
         region = self.credential_value(credentials, 'region', 'azure_region')
         api_key = self.credential_value(credentials, 'api_key', 'azure_key', 'azure_speech_key')
         
-        base_url = f"https://{region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1"
+        if path and path != "/":
+            if "speechtotext" in path or "transcriptions" in path:
+                base_url = f"https://{region}.api.cognitive.microsoft.com/{path.lstrip('/')}"
+            else:
+                base_url = f"https://{region}.stt.speech.microsoft.com/{path.lstrip('/')}"
+        else:
+            base_url = f"https://{region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1"
         
         content_type = incoming.headers.get("content-type", "audio/wav")
         headers = {
@@ -78,8 +84,19 @@ class AzureSpeechAdapter(BaseProviderAdapter):
             return super().normalize_usage(content)
         
         # Azure Speech REST API returns Duration in 100-nanosecond units
-        duration_ticks = payload.get("Duration", 0)
-        duration_seconds = duration_ticks / 10_000_000
+        # Fast Transcription API returns duration as ISO 8601 string (e.g., "PT42S")
+        duration_seconds = 0
+        if "duration" in payload and isinstance(payload["duration"], str) and payload["duration"].startswith("PT"):
+            import re
+            match = re.match(r'PT(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?', payload["duration"])
+            if match:
+                h = float(match.group(1) or 0)
+                m = float(match.group(2) or 0)
+                s = float(match.group(3) or 0)
+                duration_seconds = h * 3600 + m * 60 + s
+        else:
+            duration_ticks = payload.get("Duration", 0)
+            duration_seconds = duration_ticks / 10_000_000
         
         return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": int(duration_seconds), "estimated_cost": 0.0}
 
@@ -94,28 +111,36 @@ class AzureSpeechAdapter(BaseProviderAdapter):
         region = self.credential_value(credentials, 'region', 'azure_region')
         api_key = self.credential_value(credentials, 'api_key', 'azure_key', 'azure_speech_key')
         
-        base_url = f"https://{region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1"
+        base_url = f"https://{region}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe?api-version=2024-11-15"
         
         headers = {
             "Ocp-Apim-Subscription-Key": api_key,
-            "Content-Type": file_field.content_type or "audio/wav",
             "Accept": "application/json",
         }
         
         params = dict(incoming.query_params)
-        if "language" not in params:
+        language = params.get("language")
+        if not language:
             language = form.get("language")
-            if language and isinstance(language, str):
-                params["language"] = language
-            else:
-                params["language"] = "en-US"
+            if not language or not isinstance(language, str):
+                language = "en-US"
+                
+        import json
+        definition = {
+            "locales": [language]
+        }
+        
+        filename = getattr(file_field, "filename", None) or "audio.wav"
+        files = {
+            "audio": (filename, audio_bytes, file_field.content_type or "audio/wav"),
+            "definition": (None, json.dumps(definition), "application/json")
+        }
                 
         return BuiltRequest(
             method="POST",
             url=base_url,
             headers=headers,
-            params=params,
-            content=audio_bytes,
+            files=files,
             is_streaming=False,
         )
 
@@ -129,6 +154,10 @@ class AzureSpeechAdapter(BaseProviderAdapter):
         usage = self.normalize_usage(content)
         
         text = payload.get("DisplayText", "")
+        if not text and "combinedRecognizedPhrases" in payload:
+            phrases = payload["combinedRecognizedPhrases"]
+            if phrases and isinstance(phrases, list) and len(phrases) > 0:
+                text = phrases[0].get("display", "")
         
         openai_response = {
             "text": text
