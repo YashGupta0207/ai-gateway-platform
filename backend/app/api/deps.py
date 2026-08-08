@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.security import TokenType, decode_token, hash_developer_token
 from app.models.models import Admin, DeveloperToken, DeveloperTokenStatus, Provider, ProviderProfile, ProviderStatus, TokenProviderAuthorization
-from sqlalchemy import select
+from sqlalchemy import select, func
 from app.repositories.token_repository import TokenRepository
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -100,7 +100,8 @@ async def resolve_authorized_provider(db: AsyncSession, token: DeveloperToken, r
     if not requested_name:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Missing X-Gateway-Provider header")
         
-    result = await db.execute(select(Provider).where((Provider.name == requested_name) | (Provider.display_name == requested_name)))
+    requested_name_lower = requested_name.lower()
+    result = await db.execute(select(Provider).where((func.lower(Provider.name) == requested_name_lower) | (func.lower(Provider.display_name) == requested_name_lower)))
     provider = result.scalar_one_or_none()
     if provider is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Provider '{requested_name}' does not exist")
