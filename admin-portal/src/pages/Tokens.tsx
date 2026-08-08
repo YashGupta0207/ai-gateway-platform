@@ -113,7 +113,7 @@ export default function Tokens() {
           <tbody>
             {tokens.map((t) => (
               <tr key={t.id} className="border-b border-border/50">
-                <td className="px-5 py-3 text-text"><Link className="hover:text-accent" to={`/tokens/${t.id}`}>{t.label}</Link></td>
+                <td className="px-5 py-3 text-text"><button onClick={() => handleView(t)} className="hover:text-accent text-left">{t.label}</button></td>
                 <td className="px-5 py-3 font-mono text-xs text-muted">{t.token_prefix}…</td>
                 <td className="px-5 py-3 text-text">{t.provider_names.join(", ")}</td>
                 <td className="px-5 py-3">
@@ -128,7 +128,6 @@ export default function Tokens() {
                 <td className="px-5 py-3 font-mono text-xs text-muted">{t.last_used_at ? new Date(t.last_used_at).toLocaleString() : "never"}</td>
                 <td className="px-5 py-3">
                   <div className="flex gap-2 justify-end">
-                    <button onClick={() => handleView(t)} className="text-xs text-muted hover:text-text">View</button>
                     <button onClick={() => toggle(t)} className="text-xs text-muted hover:text-text">
                       {t.status === "active" ? "Disable" : "Enable"}
                     </button>
