@@ -8,7 +8,7 @@ export default function Tokens() {
   const [showForm, setShowForm] = useState(false);
   const [revealed, setRevealed] = useState<CreatedToken | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [visibleKeys, setVisibleKeys] = useState<Record<string, string>>({});
+  const [viewingToken, setViewingToken] = useState<{ token: DevToken, apiKey: string } | null>(null);
 
   function refresh() {
     api.listTokens().then(setTokens).catch((e) => setError(e.message));
@@ -47,11 +47,10 @@ export default function Tokens() {
     }
   }
 
-  async function reveal(t: DevToken) {
-    if (visibleKeys[t.id]) { setVisibleKeys((keys) => ({ ...keys, [t.id]: "" })); return; }
+  async function handleView(t: DevToken) {
     try {
       const full = await api.getToken(t.id, true);
-      setVisibleKeys((keys) => ({ ...keys, [t.id]: full.temporary_api_key || "" }));
+      setViewingToken({ token: t, apiKey: full.temporary_api_key || "" });
     } catch (e) { setError(e instanceof Error ? e.message : "Could not reveal token"); }
   }
 
@@ -129,8 +128,7 @@ export default function Tokens() {
                 <td className="px-5 py-3 font-mono text-xs text-muted">{t.last_used_at ? new Date(t.last_used_at).toLocaleString() : "never"}</td>
                 <td className="px-5 py-3">
                   <div className="flex gap-2 justify-end">
-                    <button onClick={() => reveal(t)} className="text-xs text-muted hover:text-text">{visibleKeys[t.id] ? "Hide" : "Reveal"}</button>
-                    <button onClick={() => { const value = visibleKeys[t.id]; if (value) navigator.clipboard.writeText(value); else reveal(t); }} className="text-xs text-muted hover:text-text">Copy</button>
+                    <button onClick={() => handleView(t)} className="text-xs text-muted hover:text-text">View</button>
                     <button onClick={() => toggle(t)} className="text-xs text-muted hover:text-text">
                       {t.status === "active" ? "Disable" : "Enable"}
                     </button>
@@ -146,6 +144,44 @@ export default function Tokens() {
           </tbody>
         </table>
       </div>
+
+      {viewingToken && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-panel border border-border rounded-lg shadow-xl w-full max-w-md overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-border">
+              <h2 className="text-lg font-medium text-text">Token Details</h2>
+              <button onClick={() => setViewingToken(null)} className="text-muted hover:text-text">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="block text-xs text-muted mb-1">Generated API Key</label>
+                <div className="bg-panelalt border border-border rounded px-3 py-2 text-sm text-accent font-mono break-all">
+                  {viewingToken.apiKey}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-muted mb-1">Backend URL</label>
+                <div className="bg-panelalt border border-border rounded px-3 py-2 text-sm text-accent font-mono break-all">
+                  https://ai-gateway-platform-cex4.onrender.com/
+                </div>
+              </div>
+            </div>
+            <div className="p-4 border-t border-border flex justify-end">
+              <button
+                onClick={() => {
+                  const textToCopy = `API Key: ${viewingToken.apiKey}\nBackend URL: https://ai-gateway-platform-cex4.onrender.com/`;
+                  navigator.clipboard.writeText(textToCopy);
+                }}
+                className="btn-primary px-4 py-2 text-sm"
+              >
+                Copy All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
