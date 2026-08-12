@@ -32,7 +32,7 @@ class AzureOpenAIAdapter(BaseProviderAdapter):
     def is_streaming_path(self, path: str, body: bytes) -> bool:
         try:
             return bool(json.loads(body or b"{}").get("stream"))
-        except (json.JSONDecodeError, AttributeError):
+        except (json.JSONDecodeError, AttributeError, UnicodeDecodeError):
             return False
 
     async def build_request(self, *, incoming: Request, path: str, body: bytes, credentials: dict[str, str]) -> BuiltRequest:
