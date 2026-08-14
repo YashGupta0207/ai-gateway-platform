@@ -60,6 +60,45 @@ async def gateway_audio_transcriptions(
     return await proxy_audio_request(db=db, token=token, provider=provider, profile_id=profile.id, incoming=request)
 
 
+@router.get("/credentials/{provider_name}")
+async def get_provider_credentials(
+    provider_name: str,
+    request: Request,
+    token: DeveloperToken = Depends(get_valid_developer_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Returns the decrypted credentials for a specific provider.
+    Used by trusted backends (like ThreadNotes) that need to connect to services 
+    directly (like Cosmos DB) instead of routing through the proxy.
+    """
+    tags_header = request.headers.get("X-Gateway-Tags")
+    tags = None
+    if tags_header:
+        import json
+        try:
+            tags = json.loads(tags_header)
+        except json.JSONDecodeError:
+            pass
+
+    provider, profile = await resolve_authorized_provider(
+        db, 
+        token, 
+        provider_name,
+        request.headers.get("X-Gateway-Profile"),
+        tags
+    )
+    
+    from sqlalchemy import select
+    from app.models.models import ProviderProfileCredential
+    from app.core.encryption import cipher
+    
+    cred_rows = (await db.execute(select(ProviderProfileCredential).where(ProviderProfileCredential.profile_id == profile.id))).scalars().all()
+    decrypted = {row.variable_name: cipher.decrypt(row.encrypted_value) for row in cred_rows}
+    
+    return {"credentials": decrypted}
+
+
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def gateway_proxy(
     path: str,
