@@ -4,7 +4,7 @@ The AI Gateway provides a secure way for trusted backends (like ThreadNotes) to 
 
 ## Endpoint
 
-**`GET /api/v1/gateway/credentials/{provider_name}`**
+**`GET /gateway/credentials/{provider_name}`**
 
 ### Headers Required
 
@@ -26,7 +26,7 @@ headers = {
 }
 
 response = requests.get(
-    f"{GATEWAY_URL}/api/v1/gateway/credentials/{PROVIDER_NAME}",
+    f"{GATEWAY_URL}/gateway/credentials/{PROVIDER_NAME}",
     headers=headers
 )
 
@@ -41,7 +41,7 @@ else:
 ### Example Request (cURL)
 
 ```bash
-curl -X GET "http://localhost:8000/api/v1/gateway/credentials/cosmos-db" \
+curl -X GET "http://localhost:8000/gateway/credentials/cosmos-db" \
      -H "Authorization: Bearer dev_your_token_here"
 ```
 
@@ -69,7 +69,7 @@ def get_cosmos_credentials():
     developer_token = os.getenv("GATEWAY_DEVELOPER_TOKEN")
     
     response = requests.get(
-        f"{gateway_url}/api/v1/gateway/credentials/cosmos-db",
+        f"{gateway_url}/gateway/credentials/cosmos-db",
         headers={"Authorization": f"Bearer {developer_token}"}
     )
     response.raise_for_status()
