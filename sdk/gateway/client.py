@@ -2,6 +2,9 @@ import os
 import httpx
 from typing import Any, Dict, Optional, Generator, Union
 
+# Hosted gateway. Override per-client with base_url= or globally with DXAI_BASE_URL.
+DEFAULT_BASE_URL = "https://ai-gateway-platform-cex4.onrender.com"
+
 class GatewayError(Exception):
     def __init__(self, status_code: int, response_body: str):
         self.status_code = status_code
@@ -11,7 +14,7 @@ class GatewayError(Exception):
 class GatewayClient:
     def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None):
         self.api_key = api_key or os.environ.get("DXAI_API_KEY")
-        self.base_url = (base_url or os.environ.get("DXAI_BASE_URL") or "http://localhost:8000").rstrip("/")
+        self.base_url = (base_url or os.environ.get("DXAI_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
         
     def _get_client(self, api_key: Optional[str] = None) -> httpx.Client:
         key = api_key or self.api_key

@@ -12,6 +12,9 @@ from typing import Any, Iterator
 
 import httpx
 
+# Hosted gateway. Override per-client with base_url= or globally with DXAI_BASE_URL.
+DEFAULT_BASE_URL = "https://ai-gateway-platform-cex4.onrender.com"
+
 
 class DXAIError(Exception):
     def __init__(self, message: str, status_code: int | None = None, response_body: str | None = None):
@@ -32,7 +35,7 @@ class _BaseGatewayClient:
         # The gateway rejects any request without X-Gateway-Provider (400), so a
         # client-level default lets calls that don't name one still resolve.
         self.provider = provider or os.environ.get("DXAI_PROVIDER")
-        self.base_url = (base_url or os.environ.get("DXAI_BASE_URL") or "https://gateway.yourdomain.com").rstrip("/")
+        self.base_url = (base_url or os.environ.get("DXAI_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
         self._http = httpx.Client(
             base_url=self.base_url,
             headers={"Authorization": f"Bearer {self.api_key}"},

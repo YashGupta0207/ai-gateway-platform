@@ -76,7 +76,7 @@ cd sdk
 pip install -e .
 python -c "
 from dxai import DXAI
-client = DXAI(api_key='dev_xxx', base_url='http://localhost:8000')
+client = DXAI(api_key='dev_xxx')   # defaults to the hosted gateway; pass base_url= or set DXAI_BASE_URL for local
 print(client.chat.completions.create(model='gpt-4o', messages=[{'role':'user','content':'hi'}]))
 "
 ```
