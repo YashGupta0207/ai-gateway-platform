@@ -2,9 +2,26 @@ import json
 
 from starlette.requests import Request
 
-from app.adapters.base import BaseProviderAdapter, BuiltRequest, CredentialField
+from app.adapters.base import (
+    BaseProviderAdapter,
+    BuiltRequest,
+    CredentialField,
+    ProviderConfigurationError,
+)
 
-API_VERSION = "2024-06-01"
+DEFAULT_API_VERSION = "2024-06-01"
+
+# Every credential variable name an admin might have used for the deployment.
+# `credential_value` casefolds and strips _/- before matching, so
+# AZURE_TRANSCRIBE_DEPLOYMENT lines up with azure_transcribe_deployment here.
+DEPLOYMENT_KEYS = (
+    "deployment_name", "deployment", "azure_deployment", "azure_openai_deployment",
+    "azure_transcribe_deployment", "azure_diarize_deployment",
+)
+API_VERSION_KEYS = ("api_version", "azure_api_version", "azure_openai_api_version")
+
+DEPLOYMENT_HEADER = "X-Gateway-Deployment"
+API_VERSION_HEADER = "X-Gateway-Api-Version"
 
 
 class AzureOpenAIAdapter(BaseProviderAdapter):
@@ -27,18 +44,69 @@ class AzureOpenAIAdapter(BaseProviderAdapter):
                 name="deployment_name", label="Deployment Name", field_type="text",
                 required=True, placeholder="gpt-4o-deployment",
             ),
+            CredentialField(
+                name="api_version", label="API Version (optional)", field_type="text",
+                required=False, placeholder=DEFAULT_API_VERSION,
+            ),
         ]
 
     def is_streaming_path(self, path: str, body: bytes) -> bool:
         try:
             return bool(json.loads(body or b"{}").get("stream"))
-        except (json.JSONDecodeError, AttributeError, UnicodeDecodeError):
+        except (json.JSONDecodeError, AttributeError, UnicodeDecodeError, TypeError):
             return False
+
+    def _resolve_deployment(self, incoming: Request, body: bytes, credentials: dict[str, str]) -> str:
+        """
+        One Azure provider can host several deployments — gpt-4o-transcribe for
+        transcription and gpt-4o-transcribe-diarize for diarization, say — so
+        the deployment has to be selectable per request, not just per profile.
+
+        Precedence: explicit header, then the `model` field the OpenAI SDK
+        already puts in the multipart body, then whatever the profile stores.
+
+        `model` is read only from multipart bodies. JSON callers (chat
+        completions) send a model name that is not necessarily a deployment
+        name, and honouring it there would silently re-route existing traffic.
+        """
+        header_value = incoming.headers.get(DEPLOYMENT_HEADER)
+        if header_value and header_value.strip():
+            return header_value.strip()
+
+        model_field = self.multipart_field(body, incoming.headers.get("content-type"), "model")
+        if model_field:
+            return model_field
+
+        credential_value = self.credential_value(credentials, *DEPLOYMENT_KEYS, required=False)
+        if credential_value and credential_value.strip():
+            return credential_value.strip()
+
+        raise ProviderConfigurationError(
+            "No Azure OpenAI deployment resolved for this request. Send a "
+            f"'{DEPLOYMENT_HEADER}' header or a 'model' field in the multipart body, "
+            "or set one of these credential variables on the provider profile: "
+            + ", ".join(DEPLOYMENT_KEYS)
+        )
+
+    def _resolve_api_version(self, incoming: Request, credentials: dict[str, str]) -> str:
+        """
+        Newer models are only served on newer API versions — gpt-4o-transcribe
+        needs 2025-04-01-preview and is absent from the old default — so this is
+        configurable, defaulting to the historical value so existing providers
+        keep behaving exactly as before.
+        """
+        header_value = incoming.headers.get(API_VERSION_HEADER)
+        if header_value and header_value.strip():
+            return header_value.strip()
+        credential_value = self.credential_value(credentials, *API_VERSION_KEYS, required=False)
+        if credential_value and credential_value.strip():
+            return credential_value.strip()
+        return DEFAULT_API_VERSION
 
     async def build_request(self, *, incoming: Request, path: str, body: bytes, credentials: dict[str, str]) -> BuiltRequest:
         endpoint = self.credential_value(credentials, "endpoint", "azure_endpoint", "azure_openai_endpoint").rstrip("/")
-        deployment = self.credential_value(credentials, "deployment_name", "deployment", "azure_deployment", "azure_openai_deployment")
         api_key = self.credential_value(credentials, "api_key", "azure_openai", "azure_api_key", "azure_openai_key")
+        deployment = self._resolve_deployment(incoming, body, credentials)
         url = f"{endpoint}/openai/deployments/{deployment}/{path.lstrip('/')}"
 
         headers = {
@@ -50,30 +118,25 @@ class AzureOpenAIAdapter(BaseProviderAdapter):
             method=incoming.method,
             url=url,
             headers=headers,
-            params={"api-version": API_VERSION},
+            params={"api-version": self._resolve_api_version(incoming, credentials)},
             content=body,
             is_streaming=self.is_streaming_path(path, body),
         )
 
     def normalize_usage(self, content: bytes) -> dict[str, int | float]:
+        """
+        Azure returns JSON for chat and for `response_format=json`, but plain
+        text for `response_format=text`. Absent usage is normal here, not an
+        error: the request still gets counted, only the token totals stay 0.
+        """
         try:
             payload = json.loads(content)
         except (ValueError, TypeError):
             return super().normalize_usage(content)
-        usage = payload.get("usage") or {}
-        prompt = usage.get("prompt_tokens", 0)
-        completion = usage.get("completion_tokens", 0)
-        total = usage.get("total_tokens", prompt + completion)
-        return {"prompt_tokens": int(prompt), "completion_tokens": int(completion), "total_tokens": int(total), "estimated_cost": 0.0}
+        return self.usage_from_payload(payload) or super().normalize_usage(content)
 
     async def build_chat_request(self, *, incoming: Request, body: bytes, credentials: dict[str, str]) -> BuiltRequest:
         return await self.build_request(incoming=incoming, path="chat/completions", body=body, credentials=credentials)
 
     def normalize_chat_response(self, content: bytes) -> tuple[bytes, dict[str, int | float]]:
-        return content, self.normalize_usage(content)
-
-    async def build_audio_request(self, *, incoming: Request, body: bytes, credentials: dict[str, str]) -> BuiltRequest:
-        return await self.build_request(incoming=incoming, path="audio/transcriptions", body=body, credentials=credentials)
-
-    def normalize_audio_response(self, content: bytes) -> tuple[bytes, dict[str, int | float]]:
         return content, self.normalize_usage(content)

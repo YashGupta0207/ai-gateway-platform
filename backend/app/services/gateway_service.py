@@ -20,6 +20,7 @@ from starlette.requests import Request
 import websockets
 import asyncio
 
+from app.adapters.base import ProviderConfigurationError
 from app.adapters.registry import registry
 from app.core.encryption import cipher, EncryptionError
 from app.models.models import ApiRequestLog, DeveloperToken, Provider, ProviderProfileCredential
@@ -58,6 +59,9 @@ async def proxy_request(
 
     try:
         built = await adapter.build_request(incoming=incoming, path=path, body=body, credentials=credentials)
+    except ProviderConfigurationError as exc:
+        await _log(db, token, provider.id, path, incoming.method, exc.status_code, None, str(exc), request_size, ip_address=client_ip, user_agent=user_agent)
+        raise HTTPException(exc.status_code, str(exc)) from exc
     except ValueError as exc:
         await _log(db, token, provider.id, path, incoming.method, None, None, str(exc), request_size, ip_address=client_ip, user_agent=user_agent)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Provider misconfigured: {exc}") from exc
@@ -134,6 +138,9 @@ async def proxy_chat_request(
     except NotImplementedError as exc:
         await _log(db, token, provider.id, "/chat/completions", incoming.method, None, None, str(exc), request_size, ip_address=client_ip, user_agent=user_agent)
         raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc)) from exc
+    except ProviderConfigurationError as exc:
+        await _log(db, token, provider.id, "/chat/completions", incoming.method, exc.status_code, None, str(exc), request_size, ip_address=client_ip, user_agent=user_agent)
+        raise HTTPException(exc.status_code, str(exc)) from exc
     except ValueError as exc:
         await _log(db, token, provider.id, "/chat/completions", incoming.method, None, None, str(exc), request_size, ip_address=client_ip, user_agent=user_agent)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Provider misconfigured: {exc}") from exc
@@ -216,6 +223,9 @@ async def proxy_audio_request(
     except NotImplementedError as exc:
         await _log(db, token, provider.id, "/audio/transcriptions", incoming.method, None, None, str(exc), request_size, ip_address=client_ip, user_agent=user_agent)
         raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc)) from exc
+    except ProviderConfigurationError as exc:
+        await _log(db, token, provider.id, "/audio/transcriptions", incoming.method, exc.status_code, None, str(exc), request_size, ip_address=client_ip, user_agent=user_agent)
+        raise HTTPException(exc.status_code, str(exc)) from exc
     except ValueError as exc:
         await _log(db, token, provider.id, "/audio/transcriptions", incoming.method, None, None, str(exc), request_size, ip_address=client_ip, user_agent=user_agent)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Provider misconfigured: {exc}") from exc
@@ -244,7 +254,16 @@ async def proxy_audio_request(
     except NotImplementedError:
         normalized_content = content
         usage = adapter.normalize_usage(content)
-        
+
+    # An adapter that handed back the very same object didn't rewrite anything,
+    # so the provider's own Content-Type still describes the body — keep it, or
+    # `response_format="text"` arrives labelled as JSON and the client SDK
+    # fails parsing it. Adapters that did reshape the body produce JSON.
+    if normalized_content is content:
+        media_type = upstream.headers.get("content-type") or "application/json"
+    else:
+        media_type = "application/json"
+
     await _log(db, token, provider.id, "/audio/transcriptions", incoming.method, upstream.status_code,
                 latency_ms, None, request_size, len(normalized_content), ip_address=client_ip,
                 user_agent=user_agent, usage=usage)
@@ -252,7 +271,7 @@ async def proxy_audio_request(
     return Response(
         content=normalized_content,
         status_code=upstream.status_code,
-        media_type="application/json",
+        media_type=media_type,
     )
 
 

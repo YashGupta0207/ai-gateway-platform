@@ -26,9 +26,11 @@ class OpenAIAdapter(BaseProviderAdapter):
         ]
 
     def is_streaming_path(self, path: str, body: bytes) -> bool:
+        # UnicodeDecodeError matters here: an audio upload is a binary multipart
+        # body, and json.loads chokes on it before it ever reaches JSONDecodeError.
         try:
             return bool(json.loads(body or b"{}").get("stream"))
-        except (json.JSONDecodeError, AttributeError):
+        except (json.JSONDecodeError, AttributeError, UnicodeDecodeError, TypeError):
             return False
 
     async def build_request(self, *, incoming: Request, path: str, body: bytes, credentials: dict[str, str]) -> BuiltRequest:
@@ -50,24 +52,17 @@ class OpenAIAdapter(BaseProviderAdapter):
         )
 
     def normalize_usage(self, content: bytes) -> dict[str, int | float]:
+        # `response_format="text"` yields a bare transcript, not JSON — and a
+        # transcript that happens to parse as JSON ("null", "42") is not a dict.
+        # Neither is an error; usage just stays 0.
         try:
             payload = json.loads(content)
         except (ValueError, TypeError):
             return super().normalize_usage(content)
-        usage = payload.get("usage") or {}
-        prompt = usage.get("prompt_tokens", 0)
-        completion = usage.get("completion_tokens", 0)
-        total = usage.get("total_tokens", prompt + completion)
-        return {"prompt_tokens": int(prompt), "completion_tokens": int(completion), "total_tokens": int(total), "estimated_cost": 0.0}
+        return self.usage_from_payload(payload) or super().normalize_usage(content)
 
     async def build_chat_request(self, *, incoming: Request, body: bytes, credentials: dict[str, str]) -> BuiltRequest:
         return await self.build_request(incoming=incoming, path="chat/completions", body=body, credentials=credentials)
 
     def normalize_chat_response(self, content: bytes) -> tuple[bytes, dict[str, int | float]]:
-        return content, self.normalize_usage(content)
-
-    async def build_audio_request(self, *, incoming: Request, body: bytes, credentials: dict[str, str]) -> BuiltRequest:
-        return await self.build_request(incoming=incoming, path="audio/transcriptions", body=body, credentials=credentials)
-
-    def normalize_audio_response(self, content: bytes) -> tuple[bytes, dict[str, int | float]]:
         return content, self.normalize_usage(content)
