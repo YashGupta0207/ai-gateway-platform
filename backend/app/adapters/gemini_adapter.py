@@ -53,9 +53,9 @@ class GeminiAdapter(BaseProviderAdapter):
             return super().normalize_usage(content)
         usage = self.usage_from_payload(
             payload,
-            prompt_key="promptTokenCount",
-            completion_key="candidatesTokenCount",
-            total_key="totalTokenCount",
+            prompt_keys=("promptTokenCount",),
+            completion_keys=("candidatesTokenCount",),
+            total_keys=("totalTokenCount",),
         )
         return usage or super().normalize_usage(content)
 

@@ -20,6 +20,12 @@ DEPLOYMENT_KEYS = (
 )
 API_VERSION_KEYS = ("api_version", "azure_api_version", "azure_openai_api_version")
 
+# Chat reports prompt_tokens/completion_tokens; audio/transcriptions reports
+# input_tokens/output_tokens. Chat spellings first, so chat metering is decided
+# before the audio aliases are ever consulted.
+PROMPT_TOKEN_KEYS = ("prompt_tokens", "input_tokens")
+COMPLETION_TOKEN_KEYS = ("completion_tokens", "output_tokens")
+
 DEPLOYMENT_HEADER = "X-Gateway-Deployment"
 API_VERSION_HEADER = "X-Gateway-Api-Version"
 
@@ -128,12 +134,55 @@ class AzureOpenAIAdapter(BaseProviderAdapter):
         Azure returns JSON for chat and for `response_format=json`, but plain
         text for `response_format=text`. Absent usage is normal here, not an
         error: the request still gets counted, only the token totals stay 0.
+
+        Chat and transcription spell usage differently on the same provider, so
+        both spellings are accepted with the chat keys first. A chat response
+        always carries prompt_tokens/completion_tokens and so never reaches the
+        audio aliases; a transcription carries only input_tokens/output_tokens,
+        which used to leave prompt and completion recorded as 0.
         """
         try:
             payload = json.loads(content)
         except (ValueError, TypeError):
             return super().normalize_usage(content)
-        return self.usage_from_payload(payload) or super().normalize_usage(content)
+        usage = self.usage_from_payload(
+            payload,
+            prompt_keys=PROMPT_TOKEN_KEYS,
+            completion_keys=COMPLETION_TOKEN_KEYS,
+        )
+        if usage is None:
+            return super().normalize_usage(content)
+        return usage | self._token_breakdown(payload)
+
+    @staticmethod
+    def _token_breakdown(payload: dict) -> dict[str, int]:
+        """
+        Split the input tokens into audio vs text where Azure reports it.
+
+        Transcription bills audio and text input at different rates, so the two
+        are worth keeping apart. Only emitted when the provider actually sends
+        `input_token_details`, which keeps chat usage dicts byte-identical to
+        what they were before.
+
+        Note: ApiRequestLog has no column for these yet, so they are available
+        to callers of normalize_usage but are not persisted — adding them to the
+        log needs a migration.
+        """
+        usage = payload.get("usage")
+        if not isinstance(usage, dict):
+            return {}
+        details = usage.get("input_token_details")
+        if not isinstance(details, dict):
+            return {}
+        breakdown = {}
+        for source_key, out_key in (("audio_tokens", "audio_tokens"), ("text_tokens", "text_tokens")):
+            value = details.get(source_key)
+            if value is not None:
+                try:
+                    breakdown[out_key] = int(value)
+                except (TypeError, ValueError):
+                    continue
+        return breakdown
 
     async def build_chat_request(self, *, incoming: Request, body: bytes, credentials: dict[str, str]) -> BuiltRequest:
         return await self.build_request(incoming=incoming, path="chat/completions", body=body, credentials=credentials)

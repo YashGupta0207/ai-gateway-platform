@@ -143,6 +143,59 @@ def test_usage_is_parsed_when_present():
     }
 
 
+# A verbatim gpt-4o-transcribe reply with response_format=json.
+TRANSCRIBE_USAGE_BODY = json.dumps({
+    "text": "hello world",
+    "usage": {
+        "type": "tokens",
+        "total_tokens": 23,
+        "input_tokens": 20,
+        "input_token_details": {"text_tokens": 0, "audio_tokens": 20},
+        "output_tokens": 3,
+    },
+}).encode()
+
+
+def test_transcription_usage_uses_input_output_token_keys():
+    """These used to record 0/0/23 because only the chat spellings were read."""
+    usage = AzureOpenAIAdapter().normalize_usage(TRANSCRIBE_USAGE_BODY)
+    assert usage["prompt_tokens"] == 20
+    assert usage["completion_tokens"] == 3
+    assert usage["total_tokens"] == 23
+
+
+def test_transcription_usage_surfaces_the_audio_text_split():
+    usage = AzureOpenAIAdapter().normalize_usage(TRANSCRIBE_USAGE_BODY)
+    assert usage["audio_tokens"] == 20
+    assert usage["text_tokens"] == 0
+
+
+def test_chat_usage_keys_take_precedence_over_the_audio_aliases():
+    """A response carrying both spellings must still meter as chat."""
+    payload = json.dumps({"usage": {
+        "prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11,
+        "input_tokens": 999, "output_tokens": 999,
+    }}).encode()
+    usage = AzureOpenAIAdapter().normalize_usage(payload)
+    assert (usage["prompt_tokens"], usage["completion_tokens"]) == (5, 6)
+
+
+def test_chat_usage_dict_gains_no_extra_keys():
+    """Chat metering must be byte-identical to before the audio-key change."""
+    payload = json.dumps({"usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}}).encode()
+    assert set(AzureOpenAIAdapter().normalize_usage(payload)) == {
+        "prompt_tokens", "completion_tokens", "total_tokens", "estimated_cost",
+    }
+
+
+def test_transcription_without_token_details_still_meters():
+    """Whisper-style duration usage carries no token counts; that is not an error."""
+    payload = json.dumps({"text": "hi", "usage": {"type": "duration", "seconds": 4}}).encode()
+    usage = AzureOpenAIAdapter().normalize_usage(payload)
+    assert usage["total_tokens"] == 0
+    assert "audio_tokens" not in usage
+
+
 def test_audio_response_is_passthrough():
     """Returning the same object is what tells the Gateway to keep Azure's Content-Type."""
     content = b"a transcript"
@@ -357,6 +410,15 @@ def test_tokens_are_recorded_when_azure_reports_usage():
     _, _, token, _ = run_proxy(upstream_body=payload, upstream_headers={"content-type": "application/json"})
     assert token.total_tokens == 16
     assert (token.prompt_tokens, token.completion_tokens) == (11, 5)
+
+
+def test_proxied_transcription_records_prompt_and_completion_not_just_total():
+    """End to end: 20/3/23 in both the log row and the token counters, not 0/0/23."""
+    _, db, token, _ = run_proxy(upstream_body=TRANSCRIBE_USAGE_BODY,
+                                upstream_headers={"content-type": "application/json"})
+    entry = db.added[0]
+    assert (entry.prompt_tokens, entry.completion_tokens, entry.total_tokens) == (20, 3, 23)
+    assert (token.prompt_tokens, token.completion_tokens, token.total_tokens) == (20, 3, 23)
 
 
 def test_credentials_never_leak_back_to_the_caller():

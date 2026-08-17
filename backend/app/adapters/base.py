@@ -199,11 +199,18 @@ class BaseProviderAdapter(ABC):
             return None
 
     @staticmethod
-    def usage_from_payload(payload: object, *, prompt_key: str = "prompt_tokens",
-                           completion_key: str = "completion_tokens",
-                           total_key: str = "total_tokens") -> dict[str, int | float] | None:
+    def usage_from_payload(payload: object, *,
+                           prompt_keys: tuple[str, ...] = ("prompt_tokens",),
+                           completion_keys: tuple[str, ...] = ("completion_tokens",),
+                           total_keys: tuple[str, ...] = ("total_tokens",)) -> dict[str, int | float] | None:
         """
         Read token counts out of an already-decoded provider response.
+
+        Each argument is an ordered list of candidate key names, because one
+        provider can spell usage differently per endpoint — Azure's chat route
+        reports prompt_tokens/completion_tokens while its transcription route
+        reports input_tokens/output_tokens. First key present wins.
+
         Returns None when the payload carries no usage block — a plain-text
         transcription, for instance — so callers can fall back to zeros
         without treating it as an error.
@@ -213,9 +220,17 @@ class BaseProviderAdapter(ABC):
         usage = payload.get("usage") or payload.get("usageMetadata") or {}
         if not isinstance(usage, dict):
             return None
-        prompt = usage.get(prompt_key) or 0
-        completion = usage.get(completion_key) or 0
-        total = usage.get(total_key)
+
+        def first_present(keys: tuple[str, ...]):
+            for key in keys:
+                value = usage.get(key)
+                if value is not None:
+                    return value
+            return None
+
+        prompt = first_present(prompt_keys) or 0
+        completion = first_present(completion_keys) or 0
+        total = first_present(total_keys)
         if total is None:
             total = prompt + completion
         try:

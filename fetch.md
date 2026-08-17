@@ -142,6 +142,15 @@ JSON. Token counts are recorded when the provider reports a `usage` block; a
 plain-text transcript carries none, so those requests are counted with zero
 tokens rather than failing.
 
+Use `response_format="json"` if you want per-token metering. Azure's
+transcription usage block spells its counts `input_tokens` / `output_tokens`
+rather than the chat-style `prompt_tokens` / `completion_tokens`; both spellings
+are recognised, so a transcription lands in the dashboard's Prompt and
+Completion columns like any other request. Where Azure reports
+`input_token_details`, the audio-vs-text split is computed too — audio and text
+input bill at different rates — though `ApiRequestLog` has no column for it yet,
+so it is not persisted.
+
 ### Other providers
 
 The same route works for OpenAI (`X-Gateway-Provider: OpenAI`), Gemini — where
