@@ -15,6 +15,7 @@ class Completions:
         stream: bool = False,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        provider: str | None = None,
         **kwargs: Any,
     ) -> dict | Iterator[dict]:
         """
@@ -31,8 +32,8 @@ class Completions:
             body["max_tokens"] = max_tokens
 
         if stream:
-            return self._client._stream("POST", "/chat/completions", json_body=body)
-        return self._client._request("POST", "/chat/completions", json_body=body)
+            return self._client._stream("POST", "/chat/completions", json_body=body, provider=provider)
+        return self._client._request("POST", "/chat/completions", json_body=body, provider=provider)
 
 
 class Chat:

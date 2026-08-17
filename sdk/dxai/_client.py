@@ -21,13 +21,17 @@ class DXAIError(Exception):
 
 
 class _BaseGatewayClient:
-    def __init__(self, api_key: str | None = None, base_url: str | None = None, timeout: float = 120.0):
+    def __init__(self, api_key: str | None = None, base_url: str | None = None, timeout: float = 120.0,
+                 provider: str | None = None):
         self.api_key = api_key or os.environ.get("DXAI_API_KEY")
         if not self.api_key:
             raise DXAIError(
                 "No API key provided. Pass api_key='dev_...' or set the DXAI_API_KEY env var. "
                 "Get a token from your admin portal — never a real provider key."
             )
+        # The gateway rejects any request without X-Gateway-Provider (400), so a
+        # client-level default lets calls that don't name one still resolve.
+        self.provider = provider or os.environ.get("DXAI_PROVIDER")
         self.base_url = (base_url or os.environ.get("DXAI_BASE_URL") or "https://gateway.yourdomain.com").rstrip("/")
         self._http = httpx.Client(
             base_url=self.base_url,
@@ -38,6 +42,7 @@ class _BaseGatewayClient:
     def _request(self, method: str, path: str, *, json_body: dict | None = None,
                  files: dict | None = None, params: dict | None = None, provider: str | None = None,
                  content: bytes | None = None) -> dict:
+        provider = provider or self.provider
         headers = {"X-Gateway-Provider": provider} if provider else None
         response = self._http.request(method, f"/gateway{path}", json=json_body, files=files, params=params, headers=headers, content=content)
         if response.status_code >= 400:
@@ -47,8 +52,11 @@ class _BaseGatewayClient:
             )
         return response.json()
 
-    def _stream(self, method: str, path: str, *, json_body: dict | None = None) -> Iterator[dict]:
-        with self._http.stream(method, f"/gateway{path}", json=json_body) as response:
+    def _stream(self, method: str, path: str, *, json_body: dict | None = None,
+                provider: str | None = None) -> Iterator[dict]:
+        provider = provider or self.provider
+        headers = {"X-Gateway-Provider": provider} if provider else None
+        with self._http.stream(method, f"/gateway{path}", json=json_body, headers=headers) as response:
             if response.status_code >= 400:
                 response.read()
                 raise DXAIError(

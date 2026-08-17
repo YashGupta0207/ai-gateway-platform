@@ -14,4 +14,4 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["dxai", "dxai.resources", "dxazure"]
+packages = ["dxai", "dxai.resources", "dxazure", "gateway"]

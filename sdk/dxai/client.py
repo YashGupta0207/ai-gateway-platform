@@ -20,8 +20,9 @@ class DXAI(_BaseGatewayClient):
     this SDK never sees, stores, or accepts a real provider API key.
     """
 
-    def __init__(self, api_key: str | None = None, base_url: str | None = None, timeout: float = 120.0):
-        super().__init__(api_key=api_key, base_url=base_url, timeout=timeout)
+    def __init__(self, api_key: str | None = None, base_url: str | None = None, timeout: float = 120.0,
+                 provider: str | None = None):
+        super().__init__(api_key=api_key, base_url=base_url, timeout=timeout, provider=provider)
         self.chat = Chat(self)
 
     def request(self, *, provider: str, method: str, path: str, json: dict | None = None, params: dict | None = None) -> dict:

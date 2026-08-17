@@ -32,7 +32,7 @@ class GatewayClient:
             headers["X-Gateway-Tags"] = json.dumps(tags)
         
         client = self._get_client(api_key)
-        response = client.request(method, f"/api/v1/gateway{path}", headers=headers, **kwargs)
+        response = client.request(method, f"/gateway{path}", headers=headers, **kwargs)
         if not response.is_success:
             raise GatewayError(response.status_code, response.text)
         return response
@@ -47,7 +47,7 @@ class GatewayClient:
             headers["X-Gateway-Tags"] = json.dumps(tags)
         
         client = self._get_client(api_key)
-        with client.stream(method, f"/api/v1/gateway{path}", headers=headers, **kwargs) as response:
+        with client.stream(method, f"/gateway{path}", headers=headers, **kwargs) as response:
             if not response.is_success:
                 response.read()
                 raise GatewayError(response.status_code, response.text)
