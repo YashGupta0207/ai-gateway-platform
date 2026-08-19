@@ -101,6 +101,8 @@ export const api = {
   tokenRequests: (id: string) => request<RequestLog[]>(`/tokens/${id}/requests`),
   tokenUsage: (id: string) => request<TokenUsage>(`/tokens/${id}/usage`),
   createToken: (payload: unknown) => request<CreatedToken>("/tokens", { method: "POST", body: JSON.stringify(payload) }),
+  updateTokenLimits: (id: string, payload: TokenLimits) =>
+    request<DevToken>(`/tokens/${id}/limits`, { method: "PATCH", body: JSON.stringify(payload) }),
   disableToken: (id: string) => request<DevToken>(`/tokens/${id}/disable`, { method: "POST" }),
   enableToken: (id: string) => request<DevToken>(`/tokens/${id}/enable`, { method: "POST" }),
   regenerateToken: (id: string) => request<CreatedToken>(`/tokens/${id}/regenerate`, { method: "POST" }),
@@ -174,6 +176,13 @@ export interface ProviderDetails extends Provider {
   profiles: ProfileDetails[];
   total_requests: number;
   total_tokens_used: number;
+}
+
+export interface TokenLimits {
+  daily_request_limit?: number | null;
+  monthly_request_limit?: number | null;
+  daily_token_limit?: number | null;
+  monthly_token_limit?: number | null;
 }
 
 export interface DevToken {

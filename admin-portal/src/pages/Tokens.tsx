@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, CreatedToken, DevToken, Provider } from "../api/client";
+import { api, CreatedToken, DevToken, Provider, TokenLimits, TokenUsage } from "../api/client";
 
 export default function Tokens() {
   const [tokens, setTokens] = useState<DevToken[]>([]);
@@ -9,6 +9,7 @@ export default function Tokens() {
   const [revealed, setRevealed] = useState<CreatedToken | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [viewingToken, setViewingToken] = useState<{ token: DevToken, apiKey: string } | null>(null);
+  const [editingLimits, setEditingLimits] = useState<DevToken | null>(null);
 
   function refresh() {
     api.listTokens().then(setTokens).catch((e) => setError(e.message));
@@ -131,6 +132,7 @@ export default function Tokens() {
                     <button onClick={() => toggle(t)} className="text-xs text-muted hover:text-text">
                       {t.status === "active" ? "Disable" : "Enable"}
                     </button>
+                    <button onClick={() => setEditingLimits(t)} className="text-xs text-muted hover:text-accent">Limits</button>
                     <button onClick={() => regenerate(t)} className="text-xs text-muted hover:text-accent">Regenerate</button>
                     <button onClick={() => remove(t)} className="text-xs text-muted hover:text-danger">Delete</button>
                   </div>
@@ -143,6 +145,14 @@ export default function Tokens() {
           </tbody>
         </table>
       </div>
+
+      {editingLimits && (
+        <LimitsDialog
+          token={editingLimits}
+          onClose={() => setEditingLimits(null)}
+          onSaved={() => { setEditingLimits(null); refresh(); }}
+        />
+      )}
 
       {viewingToken && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -181,6 +191,121 @@ export default function Tokens() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+const LIMIT_FIELDS: { key: keyof TokenLimits; label: string; unit: string }[] = [
+  { key: "daily_request_limit", label: "Daily requests", unit: "requests" },
+  { key: "monthly_request_limit", label: "Monthly requests", unit: "requests" },
+  { key: "daily_token_limit", label: "Daily tokens", unit: "tokens" },
+  { key: "monthly_token_limit", label: "Monthly tokens", unit: "tokens" },
+];
+
+function LimitsDialog({ token, onSaved, onClose }: {
+  token: DevToken; onSaved: () => void; onClose: () => void;
+}) {
+  const [values, setValues] = useState<Record<string, string>>({
+    daily_request_limit: token.daily_request_limit?.toString() ?? "",
+    monthly_request_limit: token.monthly_request_limit?.toString() ?? "",
+    daily_token_limit: token.daily_token_limit?.toString() ?? "",
+    monthly_token_limit: token.monthly_token_limit?.toString() ?? "",
+  });
+  const [usage, setUsage] = useState<TokenUsage | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Current consumption for the same window each limit governs, so the quota
+  // is set against a real number rather than a guess.
+  useEffect(() => {
+    api.tokenUsage(token.id).then(setUsage).catch(() => { });
+  }, [token.id]);
+
+  function usedFor(key: keyof TokenLimits): number | null {
+    if (!usage) return null;
+    if (key === "daily_request_limit") return usage.today.requests;
+    if (key === "monthly_request_limit") return usage.month.requests;
+    if (key === "daily_token_limit") return usage.today.total_tokens;
+    return usage.month.total_tokens;
+  }
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSaving(true);
+    try {
+      const payload: TokenLimits = {};
+      for (const { key } of LIMIT_FIELDS) {
+        const raw = (values[key] ?? "").trim();
+        payload[key] = raw === "" ? null : Number(raw);
+      }
+      await api.updateTokenLimits(token.id, payload);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update limits");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // A quota already below current usage blocks the developer's next call.
+  const blocking = LIMIT_FIELDS.filter(({ key }) => {
+    const raw = (values[key] ?? "").trim();
+    const used = usedFor(key);
+    return raw !== "" && used !== null && Number(raw) <= used;
+  });
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <form onSubmit={save} className="bg-panel border border-border rounded-lg shadow-xl w-full max-w-lg overflow-hidden">
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <div>
+            <h2 className="text-lg font-medium text-text">Usage limits</h2>
+            <p className="text-xs text-muted">{token.label}</p>
+          </div>
+          <button type="button" onClick={onClose} className="text-muted hover:text-text">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+
+        <div className="p-4 space-y-4">
+          <p className="text-xs text-muted">Leave a field blank for unlimited. Limits apply from the next request onward.</p>
+          <div className="grid grid-cols-2 gap-4">
+            {LIMIT_FIELDS.map(({ key, label, unit }) => {
+              const used = usedFor(key);
+              return (
+                <label key={key} className="block">
+                  <span className="text-xs text-muted mb-1 block">{label}</span>
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="Unlimited"
+                    value={values[key] ?? ""}
+                    onChange={(e) => setValues({ ...values, [key]: e.target.value })}
+                    className="w-full bg-panelalt border border-border rounded px-3 py-2 text-sm text-text focus:outline-none focus:ring-1 focus:ring-accent"
+                  />
+                  <span className="text-[11px] text-muted mt-1 block">
+                    {used === null ? " " : `${used.toLocaleString()} ${unit} used so far`}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+
+          {blocking.length > 0 && (
+            <p className="text-xs text-warn">
+              {blocking.map((f) => f.label.toLowerCase()).join(" and ")} {blocking.length > 1 ? "are" : "is"} at or below
+              what this token has already used — further SDK calls will be rejected with 429 until the window resets.
+            </p>
+          )}
+          {error && <p className="text-sm text-danger">{error}</p>}
+        </div>
+
+        <div className="p-4 border-t border-border flex justify-end gap-3">
+          <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+          <button type="submit" disabled={saving} className="btn-primary w-auto px-5">{saving ? "Saving..." : "Save limits"}</button>
+        </div>
+      </form>
     </div>
   );
 }

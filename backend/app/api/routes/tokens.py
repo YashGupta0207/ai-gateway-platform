@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -199,6 +199,51 @@ async def token_usage(token_id: uuid.UUID, admin: Admin = Depends(get_current_ad
         row = (await db.execute(select(func.count(ApiRequestLog.id), func.coalesce(func.sum(ApiRequestLog.prompt_tokens), 0), func.coalesce(func.sum(ApiRequestLog.completion_tokens), 0), func.coalesce(func.sum(ApiRequestLog.total_tokens), 0)).where(ApiRequestLog.developer_token_id == token_id, ApiRequestLog.created_at >= since))).one()
         return PeriodUsageOut(requests=int(row[0]), prompt_tokens=int(row[1]), completion_tokens=int(row[2]), total_tokens=int(row[3]))
     return TokenUsageOut(today=await aggregate(starts[0]), month=await aggregate(starts[1]))
+
+
+class TokenLimitsUpdate(BaseModel):
+    """
+    PATCH semantics: an omitted field is left alone, an explicit null clears the
+    limit (back to unlimited). That distinction is what lets a caller drop one
+    quota without having to restate the other three.
+    """
+    daily_request_limit: int | None = Field(default=None, ge=1)
+    monthly_request_limit: int | None = Field(default=None, ge=1)
+    daily_token_limit: int | None = Field(default=None, ge=1)
+    monthly_token_limit: int | None = Field(default=None, ge=1)
+
+
+@router.patch("/{token_id}/limits", response_model=TokenOut)
+async def update_token_limits(
+    token_id: uuid.UUID,
+    payload: TokenLimitsUpdate,
+    admin: Admin = Depends(require_role(AdminRole.SUPER_ADMIN, AdminRole.ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Adjust a token's quotas after creation — until now they were fixed at
+    creation time and there was no way to change them.
+
+    Enforcement itself is untouched: the Gateway still compares these against
+    the token's ApiRequestLog totals, so a new limit takes effect on the very
+    next request and nothing about the developer-facing SDK contract changes.
+    A limit set below current usage starts returning 429 immediately.
+    """
+    repo = TokenRepository(db)
+    token = await repo.get_by_id(token_id)
+    if token is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Token not found")
+
+    changes = payload.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Supply at least one of: daily_request_limit, monthly_request_limit, "
+            "daily_token_limit, monthly_token_limit. Send null to clear a limit.",
+        )
+    for field_name, value in changes.items():
+        setattr(token, field_name, value)
+    return _to_out(await repo.update(token))
 
 
 @router.post("/{token_id}/disable", response_model=TokenOut)
