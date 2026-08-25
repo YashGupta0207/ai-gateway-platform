@@ -13,26 +13,50 @@ logging.basicConfig(level=logging.INFO if not settings.DEBUG else logging.DEBUG)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import os
-    email = os.environ.get("SEED_ADMIN_EMAIL")
-    password = os.environ.get("SEED_ADMIN_PASSWORD")
+
+    # Hosting dashboards tend to edit env vars in a textarea, so a value can
+    # arrive with a trailing newline. Unstripped, that newline gets baked into
+    # the password hash and nobody can ever type the matching password.
+    email = (os.environ.get("SEED_ADMIN_EMAIL") or "").strip()
+    password = (os.environ.get("SEED_ADMIN_PASSWORD") or "").strip()
+    reset_password = (os.environ.get("SEED_ADMIN_RESET_PASSWORD") or "").strip().lower() in {"1", "true", "yes", "on"}
+
     if email and password:
         from app.core.database import AsyncSessionLocal
         from sqlalchemy import select
         from app.models.models import Admin, AdminRole
         from app.core.security import hash_password
-        
+
         async with AsyncSessionLocal() as db:
             existing = (await db.execute(select(Admin).where(Admin.email == email))).scalar_one_or_none()
-            if not existing:
+            if existing is None:
                 admin = Admin(
                     email=email,
                     hashed_password=hash_password(password),
-                    full_name=os.environ.get("SEED_ADMIN_NAME", "Super Admin"),
+                    full_name=(os.environ.get("SEED_ADMIN_NAME") or "Super Admin").strip(),
                     role=AdminRole.SUPER_ADMIN,
                 )
                 db.add(admin)
                 await db.commit()
-                logging.info(f"Created super admin from environment variables: {email}")
+                logging.info("Created super admin from environment variables: %s", email)
+            elif reset_password:
+                # Editing SEED_ADMIN_PASSWORD alone does nothing once the row
+                # exists, and there is no in-app way to change an admin
+                # password — so without this an operator stays locked out.
+                existing.hashed_password = hash_password(password)
+                existing.is_active = True
+                await db.commit()
+                logging.warning(
+                    "Reset super admin password for %s from SEED_ADMIN_PASSWORD. "
+                    "Unset SEED_ADMIN_RESET_PASSWORD to stop re-applying it on every deploy.",
+                    email,
+                )
+            else:
+                logging.info(
+                    "Super admin %s already exists; password left as-is. Set "
+                    "SEED_ADMIN_RESET_PASSWORD=true to reset it from SEED_ADMIN_PASSWORD.",
+                    email,
+                )
     yield
 
 app = FastAPI(
