@@ -42,7 +42,10 @@ async function request<T>(path: string, options: RequestInit = {}, retry = true)
     },
   });
 
-  if (res.status === 401 && retry) {
+  // A 401 from /auth/* is the server rejecting the credentials just supplied,
+  // not an expired session — refreshing and redirecting there would replace the
+  // real "Invalid email or password" with a misleading "Session expired".
+  if (res.status === 401 && retry && !path.startsWith("/auth/")) {
     const refreshed = await refreshAccessToken();
     if (refreshed) return request<T>(path, options, false);
     clearTokens();
